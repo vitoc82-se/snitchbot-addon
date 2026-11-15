@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: Snitchbot
+## Notes: Your guild's raid shopping list from Snitchbot, in game. Type /sb.
+## Author: Snitchbot
+## Version: @project-version@
+## SavedVariables: SnitchbotDB
+## X-Website: https://forever.snitchbot.app
+
+Code.lua
+Snitchbot.lua

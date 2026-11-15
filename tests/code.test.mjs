@@ -44,14 +44,20 @@ const FAKE_UI = `
       return function() end
     end })
   end
-  CreateFrame = function(_, name) local w = widget(); if name then _G[name] = w end; return w end
+  FRAMES = {}
+  CreateFrame = function(_, name) local w = widget(); FRAMES[#FRAMES + 1] = w; if name then _G[name] = w end; return w end
   UIParent, UISpecialFrames, SlashCmdList = widget(), {}, {}
   C_Timer = { After = function(_, fn) fn() end }
   BAGS = { [13510] = 1, [13444] = 2 }
   BANK = { [13444] = 3 }
-  GetItemCount = function(id, bank) return (BAGS[id] or 0) + (bank and (BANK[id] or 0) or 0) end
-  GetItemInfo = function(id) if id == 13510 then return "Flask of the Titans", "|Hitem:13510|h[Flask of the Titans]|h" end end
-  GetItemIcon = function() return 1 end
+  -- Like Forever (probe 2026-11-15): only the C_Item versions exist.
+  C_Item = {
+    GetItemCount = function(id, bank) return (BAGS[id] or 0) + (bank and (BANK[id] or 0) or 0) end,
+    GetItemInfo = function(id) if id == 13510 then return "Flask of the Titans", "|Hitem:13510|h[Flask of the Titans]|h" end end,
+    GetItemIconByID = function() return 1 end,
+  }
+  IsModifiedClick = function() return true end
+  ChatEdit_InsertLink = function(link) LINKED = link end
   UnitName = function() return "Vitoc War" end
   GetBuildInfo = function() return "1.60.1", "12345", "Nov 1 2026", 16001 end
   WOW_PROJECT_ID = 99
@@ -127,6 +133,20 @@ test("the UI loads, pastes a list and shows what's short", () => {
   assert.match(out, /Raid list for Vitoc War saved: 3 items for Onyxia's Lair \(40\)/);
 });
 
+test("shift-click puts the item link in chat with Forever's C_Item", () => {
+  const out = run(`
+    SnitchbotDB = { lists = { ["Vitoc War"] = ns.ParseShop("${CODE}") } }
+    SnitchbotEvents.scripts.OnEvent(SnitchbotEvents, "PLAYER_LOGIN")
+    SlashCmdList.SNITCHBOT("")
+    -- The first row is Flask of the Titans: find its button among the frames made.
+    for _, f in pairs(FRAMES) do
+      if f.itemId == 13510 and f.scripts.OnClick then f.scripts.OnClick(f) end
+    end
+    return LINKED
+  `, { ui: true });
+  assert.equal(out, "|Hitem:13510|h[Flask of the Titans]|h");
+});
+
 test("the UI says what's short at login and makes a probe line", () => {
   const out = run(`
     SnitchbotDB = { lists = { ["Vitoc War"] = ns.ParseShop("${CODE}") } }
@@ -136,5 +156,6 @@ test("the UI says what's short at login and makes a probe line", () => {
   `, { ui: true });
   assert.match(out, /1 raid items short for Onyxia's Lair \(40\)/);
   assert.match(out, /\|SNITCHBOT:PROBE:1;version=1\.60\.1;build=12345;interface=16001;project=99;/);
-  assert.match(out, /;GetItemCount=1;/);
+  assert.match(out, /;C_Item\.GetItemCount=1;GetItemCount=0;/);
+  assert.match(out, /;READY_CHECK=1;/);
 });

@@ -41,6 +41,12 @@ local function itemName(id)
   return name
 end
 
+-- Forever has only the C_Item versions (probe, 2026-11-15); the globals are a fallback.
+local function itemLink(id)
+  local getInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+  return select(2, safe(getInfo, id))
+end
+
 local function itemIcon(id)
   return (C_Item and C_Item.GetItemIconByID and safe(C_Item.GetItemIconByID, id)) or safe(GetItemIcon, id)
     or "Interface\\Icons\\INV_Misc_QuestionMark"
@@ -101,7 +107,7 @@ local function makeRow(parent, i)
   -- Shift-click puts the item's link in chat, as everywhere in the game.
   row:SetScript("OnClick", function(self)
     if not self.itemId then return end
-    local link = select(2, safe(GetItemInfo, self.itemId))
+    local link = itemLink(self.itemId)
     if link and IsModifiedClick and safe(IsModifiedClick, "CHATLINK") and ChatEdit_InsertLink then safe(ChatEdit_InsertLink, link) end
   end)
   return row

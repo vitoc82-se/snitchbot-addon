@@ -131,11 +131,16 @@ ns.PROBE_FUNCTIONS = {
   "GetGuildBankMoney", "QueryGuildBankLog", "GetNumGuildBankTransactions",
   -- Profession cooldowns
   "C_TradeSkillUI", "GetTradeSkillInfo", "GetTradeSkillCooldown", "C_Spell.GetSpellCooldown", "GetSpellCooldown",
+  -- Round 2 (after the first probe): combat restrictions, the built-in meter, trade skill cooldowns
+  "issecretvalue", "canaccessvalue", "C_Secrets", "C_CombatLog", "C_DamageMeter", "C_EncounterJournal",
+  "C_TradeSkillUI.GetRecipeCooldown", "C_TradeSkillUI.GetAllRecipeIDs", "C_TradeSkillUI.GetBaseProfessionInfo",
+  "C_Item.GetItemLink", "ChatEdit_InsertLink", "AuctionHouseFrame", "C_PartyInfo.DoCountdown", "C_DateAndTime.GetServerTimeLocal",
 }
 ns.PROBE_EVENTS = {
   "ENCOUNTER_START", "ENCOUNTER_END", "BOSS_KILL", "ENCOUNTER_LOOT_RECEIVED", "CHAT_MSG_LOOT",
   "COMBAT_LOG_EVENT_UNFILTERED", "GUILDBANKFRAME_OPENED", "GUILDBANKBAGSLOTS_CHANGED",
   "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "AUCTION_HOUSE_SHOW", "BANKFRAME_OPENED", "TRADE_SKILL_SHOW",
+  "READY_CHECK", "UNIT_AURA", "UNIT_DIED", "PLAYER_REGEN_DISABLED", "GUILD_ROSTER_UPDATE", "GUILDBANKLOG_UPDATE",
 }
 
 return ns

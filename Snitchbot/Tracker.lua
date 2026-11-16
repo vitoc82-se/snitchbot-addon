@@ -88,15 +88,57 @@ end
 local QUALITY = { ["1eff00"] = 2, ["0070dd"] = 3, ["a335ee"] = 4, ["ff8000"] = 5, ["9d9d9d"] = 0, ["ffffff"] = 1 }
 
 --- A loot chat line -> item id, name, quality (nil if unknown), count. Nil when there's no item link.
+--- The name comes from the item link itself: roll lines start with a "[Loot]" link of their own.
 function ns.ParseLoot(msg)
   msg = tostring(msg or "")
   local id = tonumber(msg:match("|Hitem:(%d+)"))
   if not id then return nil end
-  local name = msg:match("|h%[(.-)%]|h") or ("Item " .. id)
+  local name = msg:match("|Hitem:[^|]*|h%[(.-)%]|h") or ("Item " .. id)
   local colour = msg:match("|c%x%x(%x%x%x%x%x%x)|Hitem:")
-  local quality = colour and QUALITY[colour:lower()]
+  local quality = colour and QUALITY[colour:lower()] or tonumber(msg:match("|cnIQ(%d+):|Hitem:"))
   local count = tonumber(msg:match("|h|rx(%d+)") or msg:match("%]|h|r%s*x(%d+)")) or 1
   return id, name, quality, count
+end
+
+local function formatPattern(f)
+  local p = f:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+  p = p:gsub("%%s", "(.-)"):gsub("%%d", "(%%d+)")
+  return "^" .. p .. "$"
+end
+
+--- Patterns for the lines that mean someone got an item: "You receive loot: …" and
+--- "Kesh receives loot: …", from the game's own strings when it has them. Not the
+--- Need, Greed and roll lines, which name the item too.
+function ns.LootPatterns(g)
+  g = g or {}
+  local list = {}
+  local function add(key, fallback, self)
+    local f = type(g[key]) == "string" and g[key] ~= "" and g[key] or fallback
+    list[#list + 1] = { pattern = formatPattern(f), self = self }
+  end
+  -- The "x3" forms first, or the plain form would swallow the count.
+  add("LOOT_ITEM_SELF_MULTIPLE", "You receive loot: %sx%d.", true)
+  add("LOOT_ITEM_SELF", "You receive loot: %s.", true)
+  add("LOOT_ITEM_MULTIPLE", "%s receives loot: %sx%d.", false)
+  add("LOOT_ITEM", "%s receives loot: %s.", false)
+  return list
+end
+
+--- A loot chat line -> { self, who, id, name, quality, count }, or nil when it isn't
+--- someone receiving an item.
+function ns.ParseLootLine(msg, patterns)
+  msg = tostring(msg or "")
+  for _, p in ipairs(patterns) do
+    local c = { msg:match(p.pattern) }
+    if c[1] then
+      local who, link, n
+      if p.self then link, n = c[1], c[2] else who, link, n = c[1], c[2], c[3] end
+      local id, name, quality, count = ns.ParseLoot(link)
+      if not id then return nil end
+      return { self = p.self, who = who, id = id, name = name, quality = quality, count = tonumber(n) or count }
+    end
+  end
+  return nil
 end
 
 --- Boss kills in a run, and pulls.

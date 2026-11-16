@@ -435,13 +435,17 @@ local function resetSession()
   say("Session reset.")
 end
 
--- The dungeon or raid you're in: its name and a key that tells instances apart.
+-- The dungeon or raid you're in: its name and a key that tells dungeons apart. Just the
+-- dungeon: WoW Forever reports difficulty 0 or 1 for the same run (seen 2026-11-16).
 local function instance()
   local inside, kind = safe(IsInInstance)
   if not inside or (kind ~= "party" and kind ~= "raid") then return nil end
-  local name, _, difficulty, difficultyName, _, _, _, id = safe(GetInstanceInfo)
-  return { name = name or "Dungeon", key = tostring(id or name) .. ":" .. tostring(difficulty or ""), kind = kind, difficulty = difficultyName }
+  local name, _, _, difficultyName, _, _, _, id = safe(GetInstanceInfo)
+  return { name = name or "Dungeon", key = tostring(id or name), kind = kind, difficulty = difficultyName ~= "" and difficultyName or nil }
 end
+
+-- Runs saved by 0.1.5 keyed "36:0".
+local function runKey(run) return (tostring(run.key or ""):match("^[^:]*")) end
 
 local function runs()
   local d = db()
@@ -461,7 +465,13 @@ local function startCombatLog()
   if C_CVar and C_CVar.SetCVar then safe(C_CVar.SetCVar, "advancedCombatLogging", "1") else safe(SetCVar, "advancedCombatLogging", "1") end
   safe(LoggingCombat, true)
   db().startedLog = true
-  say("Combat log on for this dungeon. It's saved in the game's Logs folder.")
+  local run = db().run
+  if combatLogging() then
+    say("Combat log on for this dungeon. It's saved in the game's Logs folder.")
+  elseif run and not run.logFailed then
+    run.logFailed = true -- said once; the 30-second check keeps trying
+    say("Couldn't start the combat log yet. Snitchbot keeps trying, or type /combatlog.")
+  end
 end
 
 local function stopCombatLog()
@@ -520,14 +530,26 @@ local function announce()
   if channel then safe(SendChatMessage, ANNOUNCE, channel) end
 end
 
+-- How long you can be outside after a death (released, revived at the door) before the run ends.
+local CORPSE_RUN = 15 * 60
+
 local function checkInstance(atLogin)
   local d = db()
   local inside = instance()
   -- After a logout of more than 15 minutes, the run is over.
   if atLogin and d.run and not ns.CanResume(d.run, now(), nil, 900) then endRun(true) end
-  -- Running back as a ghost keeps the run going; leaving alive or entering another ends it.
-  local ghost = safe(UnitIsDeadOrGhost, "player")
-  if d.run and ((inside and d.run.key ~= inside.key) or (not inside and not ghost)) then endRun() end
+  local run = d.run
+  if run and inside and runKey(run) ~= inside.key then
+    endRun() -- a different dungeon
+  elseif run and not inside then
+    -- Leaving alive ends the run. After a death you release, run back, and may be
+    -- revived at the door outside: that's still the run, for a while.
+    local ghost = safe(UnitIsDeadOrGhost, "player")
+    if not ghost then
+      if not run.diedAt then endRun()
+      elseif now() - run.diedAt >= CORPSE_RUN then endRun(true) end -- ends when last seen inside
+    end
+  end
   if not inside then return end
   if not d.run then
     d.run = {
@@ -545,6 +567,9 @@ local function checkInstance(atLogin)
     end
   end
   d.run.lastSeen = now()
+  if not safe(UnitIsDeadOrGhost, "player") then d.run.diedAt = nil end
+  d.run.key = inside.key
+  d.run.difficulty = d.run.difficulty or inside.difficulty
   startCombatLog()
 end
 
@@ -588,21 +613,48 @@ local function onEncounter(event, id, name, _, _, success)
   update()
 end
 
+local LOOT = ns.LootPatterns(_G)
+
+-- "Nonut Novemba" or "Nonut-Novemba" -> "Nonut", when Nonut is in the run.
+local function looter(run, who)
+  who = tostring(who or "")
+  local names = { me() }
+  for name in pairs(run.group or {}) do names[#names + 1] = name end
+  for _, name in ipairs(names) do
+    local rest = who:sub(#name + 1, #name + 1)
+    if who:sub(1, #name) == name and (rest == "" or rest == " " or rest == "-") then return name end
+  end
+  local short = ns.ShortName(who)
+  return short ~= "" and short or nil
+end
+
 local function onLoot(msg, who)
   local run = db().run
   if not run then return end
-  local id, name, quality, n = ns.ParseLoot(msg)
-  if not id or (quality and quality < 2) then return end
+  local l = ns.ParseLootLine(msg, LOOT)
+  if not l or (l.quality and l.quality < 2) then return end
+  local quality = l.quality
   if not quality then
-    quality = select(3, safe(C_Item and C_Item.GetItemInfo or GetItemInfo, id))
+    quality = select(3, safe(C_Item and C_Item.GetItemInfo or GetItemInfo, l.id))
     if quality and quality < 2 then return end
   end
-  who = ns.ShortName(who)
   run.loot = run.loot or {}
   if #run.loot < 60 then
-    run.loot[#run.loot + 1] = { id = id, name = name, q = quality or 2, n = n, who = who ~= "" and who or me() }
+    local name = l.self and me() or looter(run, (who and who ~= "") and who or l.who)
+    run.loot[#run.loot + 1] = { id = l.id, name = l.name, q = quality or 2, n = l.count, who = name or me() }
   end
   update()
+end
+
+-- 0.1.5 saved every Need, Greed and roll line as an item called "Loot".
+local function cleanLoot()
+  for _, run in ipairs(runs()) do
+    if type(run.loot) == "table" then
+      local kept = {}
+      for _, l in ipairs(run.loot) do if l.name ~= "Loot" then kept[#kept + 1] = l end end
+      run.loot = kept
+    end
+  end
 end
 
 local function onMoney()
@@ -849,8 +901,18 @@ local function runTooltip(row)
   if run.loot and #run.loot > 0 then
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Loot", C.accent[1], C.accent[2], C.accent[3])
+    local lines, seen = {}, {}
     for _, l in ipairs(run.loot) do
-      GameTooltip:AddDoubleLine((QUALITY_HEX[l.q] or "") .. l.name .. "|r" .. ((l.n or 1) > 1 and (" x" .. l.n) or ""), l.who or "", 1, 1, 1, C.dim[1], C.dim[2], C.dim[3])
+      local k = tostring(l.id) .. ":" .. tostring(l.who)
+      if seen[k] then seen[k].n = seen[k].n + (l.n or 1)
+      else seen[k] = { name = l.name, q = l.q, who = l.who, n = l.n or 1 }; lines[#lines + 1] = seen[k] end
+    end
+    for i, l in ipairs(lines) do
+      if i > 15 then
+        GameTooltip:AddLine(string.format("and %d more", #lines - 15), C.muted[1], C.muted[2], C.muted[3])
+        break
+      end
+      GameTooltip:AddDoubleLine((QUALITY_HEX[l.q] or "") .. l.name .. "|r" .. (l.n > 1 and (" x" .. l.n) or ""), l.who or "", 1, 1, 1, C.dim[1], C.dim[2], C.dim[3])
     end
   end
   local names = {}
@@ -1257,12 +1319,14 @@ events:SetScript("OnEvent", function(_, event, ...)
     makeFrame()
     xpNow = reading()
     session(true)
+    cleanLoot()
     if C_Timer and C_Timer.NewTicker then
       -- Keeps the run's "last seen" fresh while you stand still.
       safe(C_Timer.NewTicker, 30, function()
-        local run = db().run
-        if run and instance() then run.lastSeen = now() end
+        -- Also ends a corpse run that went on too long, and starts the combat log if it didn't take.
+        checkInstance(false)
         session()
+        update()
       end)
     end
     if settings().open then frame:Show() end
@@ -1283,7 +1347,7 @@ events:SetScript("OnEvent", function(_, event, ...)
     onKill((...))
   elseif event == "PLAYER_DEAD" then
     local run = db().run
-    if run then run.deaths = (run.deaths or 0) + 1 end
+    if run then run.deaths = (run.deaths or 0) + 1; run.diedAt = now() end
   elseif event == "ENCOUNTER_START" or event == "ENCOUNTER_END" then
     onEncounter(event, ...)
   elseif event == "CHAT_MSG_LOOT" then

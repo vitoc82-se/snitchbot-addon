@@ -126,9 +126,10 @@ test("the UI loads, pastes a list and shows what's short", () => {
     SnitchbotPasteFrame.edit.text = "${CODE}"
     SnitchbotPasteFrame.ok.scripts.OnClick()
     local list = SnitchbotDB.lists["Vitoc War"]
-    return table.concat({ #list.items, SnitchbotFrame.status.text, SAID[#SAID] }, "|")
+    return table.concat({ #list.items, SnitchbotFrame.status.text, SAID[#SAID], SnitchbotFrame.ready.text, SnitchbotFrame.pct.text, SnitchbotFrame.who.text }, "|")
   `, { ui: true });
   assert.match(out, /^3\|/);
+  assert.match(out, /\|2 of 3 ready for raid night\|67%\|Vitoc War$/);
   assert.match(out, /1 of 3 items short/);
   assert.match(out, /Raid list for Vitoc War saved: 3 items for Onyxia's Lair \(40\)/);
 });

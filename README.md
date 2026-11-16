@@ -12,3 +12,8 @@ The in-game half of [Snitchbot](https://forever.snitchbot.app) for WoW Forever.
 - `npm test` runs the real Lua in [fengari](https://github.com/fengari-lua/fengari) against a fake game, and checks every file parses as Lua 5.1 (WoW's version).
 - Releases: tag `vX.Y.Z` and run the [BigWigs packager](https://github.com/BigWigsMods/packager) locally (`.pkgmeta`); it uploads to CurseForge.
 - The shopping code format is shared with `shoppingCode()` in the website repo (`src/lib/shopping.ts`). Change both together and bump the version in the prefix.
+
+## Credits
+
+- The window's look follows [Polestar](https://github.com/fitzforge/polestar)'s night style. The code is Snitchbot's own.
+- [Inter](https://github.com/rsms/inter) font by The Inter Project Authors, under the SIL Open Font License 1.1 (`Snitchbot/Media/Fonts/Inter-OFL.txt`).

@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: Snitchbot
-## Notes: Your guild's raid shopping list from Snitchbot, in game. Type /sb.
+## Notes: Your guild's raid shopping list, XP per hour and dungeon runs from Snitchbot. Type /sb.
 ## Author: Snitchbot
 ## Version: @project-version@
 ## SavedVariables: SnitchbotDB
@@ -8,4 +8,5 @@
 ## X-Curse-Project-ID: 1806816
 
 Code.lua
+Tracker.lua
 Snitchbot.lua

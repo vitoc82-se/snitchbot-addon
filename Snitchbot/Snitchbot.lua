@@ -1,6 +1,9 @@
 --[[ Snitchbot: your guild's raid shopping list in game.
   /sb           show or hide the list
   /sb paste     paste a code from auction.snitchbot.app (Raid list → Copy for the addon)
+  /sb xp        XP per hour, time to level, kills, and your dungeon runs
+  /sb runs      your last five runs in chat
+  /sb log       start the combat log in dungeons, or not (on by default)
   /sb probe     a line to send to Snitchbot: which game functions this client has
 
   Written defensively: WoW Forever's addon API isn't documented, so every game
@@ -525,6 +528,267 @@ refresh = function()
   if frame.scroll.place then frame.scroll.place() end
 end
 
+-- ---- XP tracker and dungeon runs
+
+local KILL = ns.KillPattern(COMBATLOG_XPGAIN_FIRSTPERSON)
+local tracker, xpNow
+local updateTracker
+local now = function() return safe(time) or 0 end
+
+local function settings()
+  local d = db()
+  d.settings = type(d.settings) == "table" and d.settings or {}
+  if d.settings.combatLog == nil then d.settings.combatLog = true end
+  return d.settings
+end
+
+local function reading()
+  return {
+    level = tonumber(safe(UnitLevel, "player")) or 0,
+    xp = tonumber(safe(UnitXP, "player")) or 0,
+    max = tonumber(safe(UnitXPMax, "player")) or 0,
+  }
+end
+
+-- The session carries on over a /reload or a quick relog (checked at login), else starts again.
+local function session(atLogin)
+  local d = db()
+  local key = me()
+  if type(d.session) ~= "table" or (atLogin and not ns.CanResume(d.session, now(), key, 600)) then
+    d.session = { key = key, started = now(), xp = 0, kills = 0 }
+  end
+  d.session.lastSeen = now()
+  return d.session
+end
+
+-- The dungeon or raid you're in: its name and a key that tells instances apart.
+local function instance()
+  local inside, kind = safe(IsInInstance)
+  if not inside or (kind ~= "party" and kind ~= "raid") then return nil end
+  local name, _, difficulty, difficultyName, _, _, _, id = safe(GetInstanceInfo)
+  return { name = name or "Dungeon", key = tostring(id or name) .. ":" .. tostring(difficulty or ""), kind = kind, difficulty = difficultyName }
+end
+
+local function runs()
+  local d = db()
+  d.runs = type(d.runs) == "table" and d.runs or {}
+  return d.runs
+end
+
+-- ---- The combat log: on in dungeons, so we can learn what WoW Forever writes.
+
+local function combatLogging() return safe(LoggingCombat) and true or false end
+
+local function startCombatLog()
+  if not settings().combatLog then return end
+  if type(LoggingCombat) ~= "function" then return say("This client can't start the combat log from an addon. Type /combatlog instead.") end
+  if combatLogging() then return end
+  -- Advanced logging adds positions and health: what Warcraft Logs reads.
+  if C_CVar and C_CVar.SetCVar then safe(C_CVar.SetCVar, "advancedCombatLogging", "1") else safe(SetCVar, "advancedCombatLogging", "1") end
+  safe(LoggingCombat, true)
+  db().startedLog = true
+  say("Combat log on for this dungeon. It's saved in the game's Logs folder.")
+end
+
+local function stopCombatLog()
+  local d = db()
+  if not d.startedLog then return end
+  d.startedLog = nil
+  if combatLogging() then safe(LoggingCombat, false); say("Combat log off.") end
+end
+
+-- ---- Runs
+
+-- A run you left ends now; one left alone (logged out, gave up) ended when last seen.
+local function endRun(stale)
+  local d = db()
+  local run = d.run
+  if not run then return end
+  d.run = nil
+  run.ended = stale and run.lastSeen or now()
+  run.lastSeen = nil
+  local list = runs()
+  table.insert(list, 1, run)
+  while #list > 100 do table.remove(list) end
+  say(ns.RunSummary(run, now()))
+  stopCombatLog()
+end
+
+local function checkInstance(atLogin)
+  local d = db()
+  local inside = instance()
+  -- After a logout of more than 15 minutes, the run is over.
+  if atLogin and d.run and not ns.CanResume(d.run, now(), nil, 900) then endRun(true) end
+  -- Running back as a ghost keeps the run going; leaving alive or entering another ends it.
+  local ghost = safe(UnitIsDeadOrGhost, "player")
+  if d.run and ((inside and d.run.key ~= inside.key) or (not inside and not ghost)) then endRun() end
+  if not inside then return end
+  if not d.run then
+    d.run = {
+      key = inside.key, name = inside.name, kind = inside.kind, difficulty = inside.difficulty,
+      character = me(), level = reading().level, started = now(), kills = 0, xp = 0, deaths = 0, mobs = {},
+    }
+    say(string.format("Tracking %s: kills, XP and time. /sb xp shows it.", inside.name))
+    if tracker then tracker:Show() end
+  end
+  d.run.lastSeen = now()
+  startCombatLog()
+end
+
+-- ---- Window
+
+local function row(parent, y, label)
+  local l = text(parent, 12, "regular", C.muted)
+  l:SetPoint("TOPLEFT", PAD, y)
+  l:SetText(label)
+  local v = text(parent, 12, "medium", C.text)
+  v:SetPoint("TOPRIGHT", -PAD, y)
+  v:SetJustifyH("RIGHT")
+  return v
+end
+
+local XP_WIDTH = 280
+
+local function makeTracker()
+  tracker = window("SnitchbotTrackerFrame", XP_WIDTH, 286, "MEDIUM")
+  tracker:SetPoint("TOPRIGHT", -260, -220)
+  tracker.title:SetText("XP and runs")
+
+  tracker.level = text(tracker, 16, "semibold", C.text)
+  tracker.level:SetPoint("TOPLEFT", PAD, -46)
+  tracker.pct = text(tracker, 12, "medium", C.dim)
+  tracker.pct:SetPoint("TOPRIGHT", -PAD, -49)
+  tracker.pct:SetJustifyH("RIGHT")
+  local track = fill(tracker, C.track, "ARTWORK")
+  track:SetHeight(4)
+  track:SetPoint("TOPLEFT", PAD, -72)
+  track:SetWidth(XP_WIDTH - 2 * PAD)
+  tracker.rested = fill(tracker, { 0.47, 0.6, 1, 0.45 }, "ARTWORK", 1)
+  tracker.rested:SetHeight(4)
+  tracker.rested:SetPoint("LEFT", track, "LEFT")
+  tracker.bar = fill(tracker, C.accent, "OVERLAY")
+  tracker.bar:SetHeight(4)
+  tracker.bar:SetPoint("LEFT", track, "LEFT")
+  tracker.xp = text(tracker, 11, "regular", C.muted)
+  tracker.xp:SetPoint("TOPLEFT", PAD, -84)
+  tracker.xp:SetPoint("RIGHT", -PAD, 0)
+
+  divider(tracker, -104)
+  tracker.rate = row(tracker, -116, "XP per hour")
+  tracker.ttl = row(tracker, -136, "To next level")
+  tracker.kills = row(tracker, -156, "Kills this session")
+  tracker.time = row(tracker, -176, "Session")
+  divider(tracker, -198)
+
+  tracker.runLabel = text(tracker, 11, "medium", C.muted)
+  tracker.runLabel:SetPoint("TOPLEFT", PAD, -210)
+  tracker.runName = text(tracker, 13, "semibold", C.text)
+  tracker.runName:SetPoint("TOPLEFT", PAD, -226)
+  tracker.runName:SetPoint("RIGHT", -PAD, 0)
+  tracker.runLine = text(tracker, 12, "regular", C.dim)
+  tracker.runLine:SetPoint("TOPLEFT", PAD, -244)
+  tracker.runLine:SetPoint("RIGHT", -PAD, 0)
+
+  -- Footer: is the combat log on? Click to switch it for dungeons.
+  local log = CreateFrame("Button", nil, tracker)
+  log:SetPoint("BOTTOMLEFT", 1, 1)
+  log:SetPoint("BOTTOMRIGHT", -1, 1)
+  log:SetHeight(24)
+  fill(log, C.footer):SetAllPoints()
+  tracker.dot = fill(log, C.muted, "ARTWORK")
+  tracker.dot:SetSize(6, 6)
+  tracker.dot:SetPoint("LEFT", PAD - 1, 0)
+  tracker.log = text(log, 11, "regular", C.dim)
+  tracker.log:SetPoint("LEFT", PAD + 11, 0)
+  log:SetScript("OnClick", function()
+    local s = settings()
+    s.combatLog = not s.combatLog
+    say(s.combatLog and "Combat log will start in dungeons." or "Combat log won't start in dungeons.")
+    if s.combatLog and db().run then startCombatLog() elseif not s.combatLog then stopCombatLog() end
+    updateTracker()
+  end)
+
+  local elapsed = 0
+  tracker:SetScript("OnUpdate", function(_, dt)
+    elapsed = elapsed + (dt or 0)
+    if elapsed >= 1 then elapsed = 0; updateTracker() end
+  end)
+  tracker:SetScript("OnShow", function() updateTracker() end)
+  tracker:Hide()
+end
+
+updateTracker = function()
+  if not tracker or not tracker:IsShown() then return end
+  local s, r, t = session(), reading(), now()
+  local maxLevel = r.max <= 0
+  tracker.level:SetText("Level " .. r.level)
+  local share = maxLevel and 1 or math.min(1, r.xp / r.max)
+  tracker.pct:SetText(maxLevel and "" or string.format("%.1f%%", share * 100))
+  local barWidth = XP_WIDTH - 2 * PAD
+  tracker.bar:SetWidth(math.max(0.01, barWidth * share))
+  local rested = tonumber(safe(GetXPExhaustion)) or 0
+  show(tracker.rested, rested > 0 and not maxLevel)
+  tracker.rested:SetWidth(math.max(0.01, barWidth * math.min(1, (r.xp + rested) / math.max(1, r.max))))
+  tracker.xp:SetText(maxLevel and "Max level" or string.format("%s / %s XP%s", ns.Num(r.xp), ns.Num(r.max),
+    rested > 0 and ("  ·  " .. ns.Num(rested) .. " rested") or ""))
+
+  local seconds = t - s.started
+  local rate = ns.Rate(s.xp, seconds)
+  tracker.rate:SetText(rate and ns.Num(rate) or "–")
+  local left = ns.TimeToLevel(r.max - r.xp, rate)
+  tracker.ttl:SetText(maxLevel and "–" or (left and ns.Duration(left) or "–"))
+  tracker.kills:SetText(ns.Num(s.kills))
+  tracker.time:SetText(ns.Duration(seconds))
+
+  local d = db()
+  local run = d.run or runs()[1]
+  if d.run then
+    tracker.runLabel:SetText("THIS RUN")
+  elseif run then
+    tracker.runLabel:SetText("LAST RUN")
+  else
+    tracker.runLabel:SetText("RUNS")
+  end
+  if run then
+    tracker.runName:SetText(run.name)
+    local line = ns.RunSummary(run, t):gsub("^.-: ", ""):gsub("%.$", "")
+    tracker.runLine:SetText(line)
+  else
+    tracker.runName:SetText("Not in a dungeon")
+    tracker.runLine:SetText("Runs start by themselves when you enter one.")
+  end
+
+  local on = combatLogging()
+  local dot = on and C.success or C.muted
+  tracker.dot:SetColorTexture(dot[1], dot[2], dot[3], 1)
+  tracker.log:SetText(on and "Combat log is on" or (settings().combatLog and "Combat log starts in dungeons" or "Combat log off in dungeons"))
+end
+
+local function onXP()
+  local gained
+  gained, xpNow = ns.XPGain(xpNow, reading())
+  if gained <= 0 then return end
+  session().xp = session().xp + gained
+  local run = db().run
+  if run then run.xp = run.xp + gained; run.lastSeen = now() end
+  updateTracker()
+end
+
+local function onKill(msg)
+  local name = ns.ParseKill(msg, KILL)
+  if not name then return end
+  local s = session()
+  s.kills = s.kills + 1
+  local run = db().run
+  if run then
+    run.kills = run.kills + 1
+    run.mobs = run.mobs or {}
+    run.mobs[name] = (run.mobs[name] or 0) + 1
+    run.lastSeen = now()
+  end
+  updateTracker()
+end
+
 -- ---- Probe
 
 local function probe()
@@ -559,19 +823,43 @@ local function soon()
   if C_Timer and C_Timer.After then C_Timer.After(0.3, function() pending = false; refresh() end) else pending = false; refresh() end
 end
 
-events:SetScript("OnEvent", function(_, event)
+events:SetScript("OnEvent", function(_, event, ...)
   if event == "PLAYER_LOGIN" then
     makeFrame()
+    makeTracker()
+    xpNow = reading()
+    session(true)
+    if C_Timer and C_Timer.NewTicker then
+      -- Keeps the run's "last seen" fresh while you stand still.
+      safe(C_Timer.NewTicker, 30, function()
+        local run = db().run
+        if run and instance() then run.lastSeen = now() end
+        session()
+      end)
+    end
     local list = db().lists[me()]
     if list then
       local _, short = ns.Progress(list, count)
       if short > 0 then say(string.format("%d raid items short for %s. Type /sb to see them.", short, ns.RaidLabel(list))) end
     end
+  elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_UNGHOST" or event == "PLAYER_ALIVE" then
+    local isLogin, isReload = ...
+    checkInstance(event == "PLAYER_ENTERING_WORLD" and (isLogin or isReload))
+    updateTracker()
+  elseif event == "PLAYER_XP_UPDATE" then
+    onXP()
+  elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
+    onKill((...))
+  elseif event == "PLAYER_DEAD" then
+    local run = db().run
+    if run then run.deaths = (run.deaths or 0) + 1 end
   else
     soon()
   end
 end)
-for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "PLAYERBANKSLOTS_CHANGED", "GET_ITEM_INFO_RECEIVED" }) do
+for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "PLAYERBANKSLOTS_CHANGED", "GET_ITEM_INFO_RECEIVED",
+  "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_UNGHOST", "PLAYER_ALIVE", "PLAYER_XP_UPDATE",
+  "CHAT_MSG_COMBAT_XP_GAIN", "PLAYER_DEAD" }) do
   pcall(events.RegisterEvent, events, e)
 end
 
@@ -580,12 +868,25 @@ SLASH_SNITCHBOT2 = "/snitchbot"
 SlashCmdList.SNITCHBOT = function(msg)
   local cmd = tostring(msg or ""):lower():match("^%s*(%S*)")
   if not frame then makeFrame() end
-  if cmd == "paste" or cmd == "import" then
+  if not tracker then makeTracker() end
+  if cmd == "xp" then
+    if tracker:IsShown() then tracker:Hide() else tracker:Show() end
+  elseif cmd == "runs" then
+    local list = runs()
+    if #list == 0 then return say("No dungeon runs yet. They start by themselves when you enter one.") end
+    for i = 1, math.min(5, #list) do say(ns.RunSummary(list[i], now())) end
+  elseif cmd == "log" then
+    local st = settings()
+    st.combatLog = not st.combatLog
+    say(st.combatLog and "Combat log will start in dungeons." or "Combat log won't start in dungeons.")
+    if st.combatLog and db().run then startCombatLog() elseif not st.combatLog then stopCombatLog() end
+    updateTracker()
+  elseif cmd == "paste" or cmd == "import" then
     openPaste()
   elseif cmd == "probe" then
     probe()
   elseif cmd == "help" then
-    say("/sb shows your raid list · /sb paste adds a new one · /sb probe makes a line to send to Snitchbot")
+    say("/sb raid list · /sb paste new list · /sb xp XP and runs · /sb runs last runs · /sb log combat log in dungeons on/off · /sb probe")
   elseif frame:IsShown() then
     frame:Hide()
   else

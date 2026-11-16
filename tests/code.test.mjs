@@ -12,13 +12,14 @@ const file = (f) => readFileSync(new URL(`../Snitchbot/${f}`, import.meta.url), 
 function run(script, { ui = false } = {}) {
   const L = lauxlib.luaL_newstate();
   lualib.luaL_openlibs(L);
-  for (const [name, src] of [["CODE_LUA", file("Code.lua")], ["UI_LUA", file("Snitchbot.lua")]]) {
+  for (const [name, src] of [["CODE_LUA", file("Code.lua")], ["TRACKER_LUA", file("Tracker.lua")], ["UI_LUA", file("Snitchbot.lua")]]) {
     lua.lua_pushstring(L, to_luastring(src));
     lua.lua_setglobal(L, to_luastring(name));
   }
   const prelude = `
     ns = {}
     assert(load(CODE_LUA, "Code.lua"))("Snitchbot", ns)
+    assert(load(TRACKER_LUA, "Tracker.lua"))("Snitchbot", ns)
     ${ui ? `${FAKE_UI}\n assert(load(UI_LUA, "Snitchbot.lua"))("Snitchbot", ns)` : ""}
   `;
   if (lauxlib.luaL_dostring(L, to_luastring(`${prelude}\n${script}`)) !== lua.LUA_OK) {
@@ -159,4 +160,73 @@ test("the UI says what's short at login and makes a probe line", () => {
   assert.match(out, /\|SNITCHBOT:PROBE:1;version=1\.60\.1;build=12345;interface=16001;project=99;/);
   assert.match(out, /;C_Item\.GetItemCount=1;GetItemCount=0;/);
   assert.match(out, /;READY_CHECK=1;/);
+});
+
+test("XP gained across readings and level-ups", () => {
+  const out = run(`
+    local g = {}
+    local function step(prev, cur) local n, nxt = ns.XPGain(prev, cur); g[#g + 1] = n; return nxt end
+    local a = { level = 20, xp = 1000, max = 5000 }
+    local b = step(a, { level = 20, xp = 1300, max = 5000 })      -- +300
+    local c = step(b, { level = 21, xp = 200, max = 6000 })       -- ding: 3700 + 200
+    -- The XP drops before the level changes: still a ding, counted once.
+    local d = step({ level = 21, xp = 5900, max = 6000 }, { level = 21, xp = 50, max = 6000 }) -- 100 + 50
+    local e = step(d, { level = 22, xp = 80, max = 7000 })        -- +30, no second ding
+    return table.concat(g, ",")
+  `);
+  assert.equal(out, "300,3900,150,30");
+});
+
+test("reads kill lines with the game's own format", () => {
+  const out = run(`
+    local p = ns.KillPattern("%s dies, you gain %d experience.")
+    local a, ax = ns.ParseKill("Defias Thug dies, you gain 135 experience.", p)
+    local b, bx = ns.ParseKill("Kobold Vermin dies, you gain 45 experience. (+45 exp Rested bonus)", p)
+    local c = ns.ParseKill("You gain 850 experience.", p)
+    return table.concat({ a, ax, b, bx, tostring(c) }, "|")
+  `);
+  assert.equal(out, "Defias Thug|135|Kobold Vermin|45|nil");
+});
+
+test("rates, time to level and summaries", () => {
+  const out = run(`
+    local rate = ns.Rate(3000, 1800)
+    return table.concat({
+      ns.Num(rate), ns.Duration(ns.TimeToLevel(12000, rate)), ns.Duration(2460), ns.Duration(35), ns.Num(1234567),
+      tostring(ns.Rate(100, 30)),
+      ns.RunSummary({ name = "The Deadmines", started = 0, ended = 2460, kills = 55, xp = 9800, deaths = 1 }),
+    }, "|")
+  `);
+  assert.equal(out, "6,000|2h 00m|41m|35s|1,234,567|nil|The Deadmines: 41m, 55 kills, 9,800 XP, 14,341 XP/h, 1 death.");
+});
+
+test("a dungeon run starts on entering, counts kills and XP, and ends on leaving", () => {
+  const out = run(`
+    CLOCK, INSIDE, LEVEL, XP = 1000, false, 20, 1000
+    time = function() return CLOCK end
+    IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
+    GetInstanceInfo = function() return "The Deadmines", "party", 1, "Normal", 5, 0, false, 36 end
+    UnitLevel = function() return LEVEL end
+    UnitXP = function() return XP end
+    UnitXPMax = function() return 5000 end
+    UnitIsDeadOrGhost = function() return false end
+    LOGGING = false
+    LoggingCombat = function(on) if on ~= nil then LOGGING = on end return LOGGING end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    INSIDE = true
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    local logged = LOGGING
+    CLOCK = CLOCK + 600
+    XP = 1135
+    e.scripts.OnEvent(e, "CHAT_MSG_COMBAT_XP_GAIN", "Defias Thug dies, you gain 135 experience.")
+    e.scripts.OnEvent(e, "PLAYER_XP_UPDATE", "player")
+    CLOCK = CLOCK + 1800
+    INSIDE = false
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    local r = SnitchbotDB.runs[1]
+    return table.concat({ tostring(logged), tostring(LOGGING), r.name, r.kills, r.xp, r.mobs["Defias Thug"], SnitchbotDB.session.kills, tostring(SnitchbotDB.run), SAID[#SAID - 1], SAID[#SAID] }, "|")
+  `, { ui: true });
+  assert.match(out, /^true\|false\|The Deadmines\|1\|135\|1\|1\|nil\|/);
+  assert.match(out, /The Deadmines: 40m, 1 kills, 135 XP, 203 XP\/h\.\|.*Combat log off\.$/);
 });

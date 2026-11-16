@@ -196,6 +196,7 @@ function ns.RunSummary(run, now)
     if rate then parts[#parts + 1] = ns.Num(rate) .. " XP/h" end
   end
   if (run.money or 0) ~= 0 then parts[#parts + 1] = (run.money > 0 and "+" or "") .. ns.Money(run.money) end
+  if (run.value or 0) > 0 then parts[#parts + 1] = "loot worth " .. ns.Money(run.value) end
   if (run.deaths or 0) > 0 then parts[#parts + 1] = run.deaths .. (run.deaths == 1 and " death" or " deaths") end
   return string.format("%s: %s.", run.name or "Dungeon", table.concat(parts, ", "))
 end

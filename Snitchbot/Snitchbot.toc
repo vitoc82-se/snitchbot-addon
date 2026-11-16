@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: Snitchbot
-## Notes: Your guild's raid shopping list, XP per hour and dungeon runs from Snitchbot. Click the minimap button.
+## Notes: Dungeon runs, personal bests, leveling pace, gold and loot value, raid buffs and your raid shopping list. Click the minimap button.
 ## Author: Snitchbot
 ## Version: @project-version@
 ## SavedVariables: SnitchbotDB
@@ -11,4 +11,5 @@
 
 Code.lua
 Tracker.lua
+Stats.lua
 Snitchbot.lua

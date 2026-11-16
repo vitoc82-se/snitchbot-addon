@@ -1,5 +1,5 @@
 --[[ Snitchbot: your guild's raid shopping list in game.
-  One window with tabs: Raid list, XP, Runs, Settings. Open it with the
+  One window with tabs: Raid list, XP, Runs, Stats, Settings. Open it with the
   minimap button (or /sb). It stays open over reloads until you close it.
 
   Written defensively: WoW Forever's addon API isn't documented, so every game
@@ -376,7 +376,17 @@ local function makePaste()
   cancel:SetPoint("RIGHT", paste.ok, "LEFT", -8, 0)
   cancel:SetScript("OnClick", function() paste:Hide() end)
   paste.ok:SetScript("OnClick", function()
-    local list, why = ns.ParseShop(paste.edit:GetText())
+    local code = paste.edit:GetText() or ""
+    if code:find(ns.PRICES_PREFIX, 1, true) then
+      local prices, why = ns.ParsePrices(code)
+      if not prices then return say(why) end
+      db().prices = prices
+      paste:Hide()
+      say(string.format("Prices saved: %s items from %s. Your loot is now valued at these prices.", ns.Num(prices.count), prices.house))
+      update()
+      return
+    end
+    local list, why = ns.ParseShop(code)
     if not list then return say(why) end
     local d = db()
     local who = list.character ~= "" and list.character or me()
@@ -389,10 +399,15 @@ local function makePaste()
 end
 
 -- Paste mode: an empty box and Import. Copy mode: read-only text to copy.
-local function openPaste()
+local function openPaste(kind)
   if not paste then makePaste() end
-  paste.title:SetText("Paste your raid list")
-  paste.hint:SetText("On auction.snitchbot.app, open Raid list and press Copy for the addon. Then click the box below and press Ctrl+V (Cmd+V on a Mac).")
+  if kind == "prices" then
+    paste.title:SetText("Paste auction house prices")
+    paste.hint:SetText("On auction.snitchbot.app, pick your auction house and press Copy prices for the addon. Then click the box below and press Ctrl+V (Cmd+V on a Mac).")
+  else
+    paste.title:SetText("Paste your raid list")
+    paste.hint:SetText("On auction.snitchbot.app, open Raid list and press Copy for the addon. Then click the box below and press Ctrl+V (Cmd+V on a Mac).")
+  end
   paste.ok:Show()
   paste.edit:SetScript("OnTextChanged", nil)
   paste.edit:SetText("")
@@ -400,10 +415,10 @@ local function openPaste()
   paste.edit:SetFocus()
 end
 
-local function showCopy(title, value)
+local function showCopy(title, value, hint)
   if not paste then makePaste() end
   paste.title:SetText(title)
-  paste.hint:SetText("Press Ctrl+C (Cmd+C on a Mac) to copy it, then paste it to Snitchbot.")
+  paste.hint:SetText(hint or "Press Ctrl+C (Cmd+C on a Mac) to copy it, then paste it to Snitchbot.")
   paste.ok:Hide()
   paste.edit:SetText(value)
   paste.edit:SetScript("OnTextChanged", function(self, userInput)
@@ -457,6 +472,58 @@ local function resetSession()
   db().session = nil
   session()
   say("Session reset.")
+end
+
+-- Kept for good, per character: the level log, time played per day, and where
+-- XP, gold and reputation came from.
+local function char()
+  local d = db()
+  d.chars = type(d.chars) == "table" and d.chars or {}
+  local key = me()
+  local c = d.chars[key]
+  if type(c) ~= "table" then c = {}; d.chars[key] = c end
+  for _, k in ipairs({ "levels", "days", "gold", "xpBy", "rep" }) do c[k] = type(c[k]) == "table" and c[k] or {} end
+  return c
+end
+
+-- Adds n under `field`.`key` for the session, the run you're in and the character.
+local function tally(field, key, n)
+  if not key or not n or n == 0 then return end
+  local s = session()
+  s[field] = type(s[field]) == "table" and s[field] or {}
+  ns.Add(s[field], key, n)
+  local run = db().run
+  if run then
+    run[field] = type(run[field]) == "table" and run[field] or {}
+    ns.Add(run[field], key, n)
+  end
+  ns.Add(char()[field], key, n)
+end
+
+-- Time played: counted while you're logged in, into the level you're at and the day.
+local lastTick
+local function tick()
+  local t = now()
+  if lastTick and t > lastTick then
+    local dt = math.min(t - lastTick, 120)
+    local c, level = char(), reading().level
+    if level > 0 then
+      c.levels[level] = c.levels[level] or { started = t, played = 0, partial = true }
+      c.levels[level].played = (c.levels[level].played or 0) + dt
+    end
+    local day = math.floor(t / 86400)
+    c.days[day] = (c.days[day] or 0) + dt
+    for old in pairs(c.days) do if old < day - 30 then c.days[old] = nil end end
+  end
+  lastTick = t
+end
+
+local function onLevelUp(newLevel)
+  tick()
+  local c, t = char(), now()
+  local level = tonumber(newLevel) or reading().level
+  if c.levels[level - 1] then c.levels[level - 1].ended = t end
+  c.levels[level] = { started = t, played = 0 }
 end
 
 -- The dungeon or raid you're in: its name and a key that tells dungeons apart. Just the
@@ -530,7 +597,34 @@ local function endRun(closed)
   ns.MergeRuns(list, AWAY)
   while #list > 100 do table.remove(list) end
   say(ns.RunSummary(list[1], now()))
+  local verdict = ns.RunVerdict(list[1], list)
+  if verdict then say(verdict) end
   stopCombatLog()
+end
+
+-- "End run" on the XP tab: done now, and no new run until you leave and come back.
+local function endRunNow()
+  local d = db()
+  if not d.run then return end
+  local inside = instance()
+  if inside then d.skipKey = inside.key end
+  d.run.leftAt = d.run.leftAt or now()
+  endRun(true)
+end
+
+-- Worn gear's durability, when a run starts.
+local function checkGear()
+  local slots = {}
+  for slot = 1, 18 do
+    local cur, max = safe(GetInventoryItemDurability, slot)
+    if max then slots[#slots + 1] = { cur = cur, max = max } end
+  end
+  local low, broken = ns.Durability(slots)
+  if broken > 0 then
+    say(string.format("%d %s broken. Repair before you pull.", broken, broken == 1 and "item is" or "items are"))
+  elseif low and low < 0.3 then
+    say(string.format("Your gear is at %d%% durability. Repair before you pull.", math.floor(low * 100 + 0.5)))
+  end
 end
 
 -- Who's in the group, with their class: attendance, later.
@@ -574,7 +668,8 @@ local function checkInstance(atLogin)
   elseif run and atLogin and not ns.CanResume(run, now(), nil, AWAY) then
     endRun() -- logged out inside and came back much later
   end
-  if not inside then return end
+  if not inside then d.skipKey = nil; return end
+  if not d.run and d.skipKey == inside.key then return end -- you ended this one with End run
   if not d.run then
     d.run = {
       key = inside.key, name = inside.name, kind = inside.kind, difficulty = inside.difficulty,
@@ -583,6 +678,7 @@ local function checkInstance(atLogin)
     }
     noteGroup(d.run)
     say(string.format("Tracking %s: kills, XP, bosses, loot and gold.", inside.name))
+    checkGear()
     -- A moment later, so the chat channels are ready after the loading screen.
     if C_Timer and C_Timer.After then C_Timer.After(3, announce) else announce() end
     if settings().openInDungeon and frame then
@@ -608,8 +704,9 @@ local function onXP()
 end
 
 local function onKill(msg)
-  local name = ns.ParseKill(msg, KILL)
+  local name, xp = ns.ParseKill(msg, KILL)
   if not name then return end
+  tally("xpBy", "kills", (xp or 0) + ns.XPBonus(msg))
   local s = session()
   s.kills = s.kills + 1
   local run = db().run
@@ -631,7 +728,9 @@ local function onEncounter(event, id, name, _, _, success)
   else
     local pull = run.pull and run.pull.id == id and run.pull or { id = id, name = name, started = now() }
     run.pull = nil
-    run.bosses[#run.bosses + 1] = { id = id, name = name or pull.name, seconds = now() - pull.started, kill = success == 1 or success == true }
+    local kill = success == 1 or success == true
+    run.bosses[#run.bosses + 1] = { id = id, name = name or pull.name, seconds = now() - pull.started, kill = kill }
+    if kill then run.lastKill = { name = name or pull.name, at = now() } end
   end
   run.lastSeen = now()
   update()
@@ -652,11 +751,28 @@ local function looter(run, who)
   return short ~= "" and short or nil
 end
 
+-- What an item is worth: the pasted auction house price, else what a vendor pays.
+local function itemValue(id)
+  local p = db().prices
+  if type(p) == "table" and type(p.prices) == "table" and p.prices[id] then return p.prices[id] end
+  local sell = select(11, safe(C_Item and C_Item.GetItemInfo or GetItemInfo, id))
+  return tonumber(sell)
+end
+
 local function onLoot(msg, who)
   local run = db().run
-  if not run then return end
   local l = ns.ParseLootLine(msg, LOOT)
-  if not l or (l.quality and l.quality < 2) then return end
+  if not l then return end
+  if l.self then
+    local value = itemValue(l.id)
+    if value and value > 0 then
+      value = value * (l.count or 1)
+      local s = session()
+      s.value = (s.value or 0) + value
+      if run then run.value = (run.value or 0) + value end
+    end
+  end
+  if not run or (l.quality and l.quality < 2) then return end
   local quality = l.quality
   if not quality then
     quality = select(3, safe(C_Item and C_Item.GetItemInfo or GetItemInfo, l.id))
@@ -665,7 +781,8 @@ local function onLoot(msg, who)
   run.loot = run.loot or {}
   if #run.loot < 60 then
     local name = l.self and me() or looter(run, (who and who ~= "") and who or l.who)
-    run.loot[#run.loot + 1] = { id = l.id, name = l.name, q = quality or 2, n = l.count, who = name or me() }
+    local boss = run.lastKill and now() - (run.lastKill.at or 0) <= 300 and run.lastKill.name or nil
+    run.loot[#run.loot + 1] = { id = l.id, name = l.name, q = quality or 2, n = l.count, who = name or me(), boss = boss }
   end
   update()
 end
@@ -681,9 +798,88 @@ local function cleanLoot()
   end
 end
 
+-- What's open when gold changes says where it came from.
+local goldCtx, lastMoney = {}, nil
 local function onMoney()
   local run, m = db().run, money()
   if run and run.moneyStart then run.money = m - run.moneyStart end
+  if lastMoney and m ~= lastMoney then tally("gold", ns.GoldSource(goldCtx, m - lastMoney, now()), m - lastMoney) end
+  lastMoney = m
+end
+
+local function setOpen(kind, open)
+  if open then
+    goldCtx.open = kind
+  elseif goldCtx.open == kind then
+    goldCtx.open, goldCtx.recent, goldCtx.recentAt = nil, kind, now()
+  end
+end
+
+local OPENS = { MERCHANT_SHOW = "merchant", MAIL_SHOW = "mail", AUCTION_HOUSE_SHOW = "auction", TRAINER_SHOW = "trainer",
+  TAXIMAP_OPENED = "taxi", TRADE_SHOW = "trade" }
+local CLOSES = { MERCHANT_CLOSED = "merchant", MAIL_CLOSED = "mail", AUCTION_HOUSE_CLOSED = "auction", TRAINER_CLOSED = "trainer",
+  TAXIMAP_CLOSED = "taxi", TRADE_CLOSED = "trade" }
+-- The modern client says which window through one event.
+local INTERACTION = { Merchant = "merchant", MailInfo = "mail", Auctioneer = "auction", Trainer = "trainer", TaxiNode = "taxi", TradePartner = "trade" }
+local function interaction(kind)
+  local types = Enum and Enum.PlayerInteractionType
+  if type(types) ~= "table" then return nil end
+  for name, value in pairs(types) do
+    if value == kind then return INTERACTION[name] end
+  end
+  return nil
+end
+
+-- ---- Raid buffs: who has a flask, elixirs, food and world buffs
+
+local function auraList(unit)
+  local list = {}
+  for i = 1, 40 do
+    local a
+    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+      a = safe(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
+    else
+      local name, _, _, _, _, _, _, _, _, id = safe(UnitBuff, unit, i)
+      a = name and { name = name, spellId = id } or nil
+    end
+    if type(a) ~= "table" then break end
+    list[#list + 1] = { name = a.name, spellId = a.spellId }
+  end
+  return list
+end
+
+local function buffCheck()
+  local people = {}
+  local function check(unit)
+    local name = safe(UnitName, unit)
+    if not name or name == "" then return end
+    local away = safe(UnitIsConnected, unit) == false or safe(UnitIsVisible, unit) == false
+    people[#people + 1] = { name = ns.ShortName(name), away = away, buffs = ns.BuffCheck(auraList(unit)) }
+  end
+  if safe(IsInRaid) then
+    for i = 1, tonumber(safe(GetNumGroupMembers)) or 0 do check("raid" .. i) end
+  else
+    check("player")
+    for i = 1, 4 do check("party" .. i) end
+  end
+  for _, line in ipairs(ns.BuffReport(people)) do say(line) end
+end
+
+-- ---- The code for myself.snitchbot.app
+
+local REGIONS = { [1] = "us", [3] = "eu" }
+local function exportCode()
+  tick()
+  local name, realm = safe(UnitFullName, "player")
+  if not name then name, realm = safe(UnitName, "player") end
+  -- WoW Forever names are two words ("Lill Slampan"); the game hands them over as name and realm.
+  local full = (realm and realm ~= "") and (name .. " " .. realm) or (name or "")
+  local _, class = safe(UnitClass, "player")
+  local c = char()
+  local code = ns.CharCode({ region = REGIONS[tonumber(safe(GetCurrentRegion)) or 0] or "eu", name = full, class = class,
+    level = reading().level, now = now(), levels = c.levels, runs = runs(), gold = c.gold, xp = c.xpBy, rep = c.rep })
+  showCopy("Copy for snitchbot.app", code,
+    "Press Ctrl+C (Cmd+C on a Mac) to copy it. Then open myself.snitchbot.app, sign in and paste it there: your runs, levels and gold show on your character's page, for you only.")
 end
 
 -- ---- Probe
@@ -715,6 +911,7 @@ local TABS = {
   { key = "raid", label = "Raid list" },
   { key = "xp", label = "XP" },
   { key = "runs", label = "Runs" },
+  { key = "stats", label = "Stats" },
   { key = "settings", label = "Settings" },
 }
 local TOP = 66 -- header and tab bar
@@ -782,7 +979,7 @@ local function makeRaidPane(p)
   local listTop, footerHeight = 82, 44
   frame.who = text(p, 16, "semibold", C.text)
   frame.who:SetPoint("TOPLEFT", PAD, -14)
-  frame.who:SetPoint("RIGHT", -PAD - 96, 0)
+  frame.who:SetPoint("RIGHT", -PAD - 190, 0)
   frame.sub = text(p, 12, "regular", C.muted)
   frame.sub:SetPoint("TOPLEFT", PAD, -36)
   frame.sub:SetPoint("RIGHT", -PAD, 0)
@@ -791,7 +988,11 @@ local function makeRaidPane(p)
   frame.status:SetPoint("RIGHT", -PAD, 0)
   frame.newList = smallButton(p, "New list", 84)
   frame.newList:SetPoint("TOPRIGHT", -PAD, -12)
-  frame.newList:SetScript("OnClick", openPaste)
+  frame.newList:SetScript("OnClick", function() openPaste() end)
+  -- Always there, list or not: before a raid, who's missing flasks and food.
+  frame.checkBuffs = smallButton(p, "Check buffs", 92)
+  frame.checkBuffs:SetPoint("RIGHT", frame.newList, "LEFT", -6, 0)
+  frame.checkBuffs:SetScript("OnClick", buffCheck)
   frame.rule = divider(p, -(listTop - 6))
 
   local sf, child = scrollArea(p, ROW_HEIGHT * 2)
@@ -827,13 +1028,13 @@ local function makeRaidPane(p)
 
   -- No list yet.
   frame.empty = text(p, 13, "regular", C.dim)
-  frame.empty:SetPoint("TOPLEFT", PAD, -20)
+  frame.empty:SetPoint("TOPLEFT", PAD, -50)
   frame.empty:SetPoint("RIGHT", -PAD, 0)
   safe(frame.empty.SetWordWrap, frame.empty, true)
   frame.empty:SetText("No raid list yet.\n\nOn auction.snitchbot.app, open Raid list and press Copy for the addon. Then paste it here.")
   frame.emptyButton = button(p, "Paste a list", true, 130)
   frame.emptyButton:SetPoint("TOPLEFT", frame.empty, "BOTTOMLEFT", 0, -18)
-  frame.emptyButton:SetScript("OnClick", openPaste)
+  frame.emptyButton:SetScript("OnClick", function() openPaste() end)
 end
 
 local XPW = WIDTH - 2 * PAD
@@ -865,23 +1066,27 @@ local function makeXPPane(p)
   x.ttl = stat(p, -110, "To next level")
   x.kills = stat(p, -132, "Kills")
   x.gold = stat(p, -154, "Gold")
-  x.time = stat(p, -176, "Session")
+  x.value = stat(p, -176, "Your loot is worth")
+  x.time = stat(p, -198, "Session")
   local reset = smallButton(p, "Reset session", 104)
-  reset:SetPoint("TOPRIGHT", -PAD, -200)
+  reset:SetPoint("TOPRIGHT", -PAD, -222)
   reset:SetScript("OnClick", function() resetSession(); update() end)
-  divider(p, -232)
+  divider(p, -254)
 
   x.runLabel = text(p, 11, "semibold", C.muted)
-  x.runLabel:SetPoint("TOPLEFT", PAD, -246)
+  x.runLabel:SetPoint("TOPLEFT", PAD, -268)
   x.runName = text(p, 14, "semibold", C.text)
-  x.runName:SetPoint("TOPLEFT", PAD, -264)
+  x.runName:SetPoint("TOPLEFT", PAD, -286)
   x.runName:SetPoint("RIGHT", -PAD, 0)
   x.runLine = text(p, 12, "regular", C.dim)
-  x.runLine:SetPoint("TOPLEFT", PAD, -284)
+  x.runLine:SetPoint("TOPLEFT", PAD, -306)
   x.runLine:SetPoint("RIGHT", -PAD, 0)
   local all = smallButton(p, "All runs", 84)
-  all:SetPoint("TOPLEFT", PAD, -310)
+  all:SetPoint("TOPLEFT", PAD, -332)
   all:SetScript("OnClick", function() selectTab("runs") end)
+  x.endRun = smallButton(p, "End run", 84)
+  x.endRun:SetPoint("LEFT", all, "RIGHT", 6, 0)
+  x.endRun:SetScript("OnClick", function() endRunNow(); update() end)
 
   -- Footer: is the combat log on? Click to switch it for dungeons.
   local log = CreateFrame("Button", nil, p)
@@ -937,6 +1142,13 @@ local function runTooltip(row)
         break
       end
       GameTooltip:AddDoubleLine((QUALITY_HEX[l.q] or "") .. l.name .. "|r" .. (l.n > 1 and (" x" .. l.n) or ""), l.who or "", 1, 1, 1, C.dim[1], C.dim[2], C.dim[3])
+    end
+  end
+  if (run.value or 0) > 0 or run.rep then
+    GameTooltip:AddLine(" ")
+    if (run.value or 0) > 0 then GameTooltip:AddDoubleLine("Your loot is worth", ns.Money(run.value), C.dim[1], C.dim[2], C.dim[3], 1, 1, 1) end
+    for faction, n in pairs(run.rep or {}) do
+      GameTooltip:AddDoubleLine(faction, (n > 0 and "+" or "") .. ns.Num(n) .. " rep", C.dim[1], C.dim[2], C.dim[3], 1, 1, 1)
     end
   end
   local names = {}
@@ -1016,6 +1228,44 @@ local function makeRunsPane(p)
   r.empty:SetText("No runs yet.\n\nEnter a dungeon and Snitchbot starts tracking by itself: time, kills, XP, bosses, loot, gold and deaths. Hover a run to see it all.")
 end
 
+-- The Stats tab: a scrolling list of lines, headings and label / value pairs.
+local LINE = 20
+
+local function makeStatsPane(p)
+  local st = {}
+  frame.st = st
+  st.title = text(p, 16, "semibold", C.text)
+  st.title:SetPoint("TOPLEFT", PAD, -14)
+  st.title:SetText("Stats")
+  st.sub = text(p, 12, "regular", C.muted)
+  st.sub:SetPoint("TOPLEFT", PAD, -36)
+  st.sub:SetPoint("RIGHT", -PAD - 150, 0)
+  st.copy = smallButton(p, "Copy for snitchbot.app", 146)
+  st.copy:SetPoint("TOPRIGHT", -PAD, -12)
+  st.copy:SetScript("OnClick", exportCode)
+  divider(p, -60)
+  local sf, child = scrollArea(p, LINE * 4)
+  sf:SetPoint("TOPLEFT", PAD - 4, -64)
+  sf:SetPoint("BOTTOMRIGHT", -(PAD - 4), 8)
+  child:SetSize(WIDTH - 2 * (PAD - 4), LINE)
+  st.scroll, st.child, st.rows = sf, child, {}
+end
+
+local function statRow(parent, i)
+  local r = CreateFrame("Frame", nil, parent)
+  r:SetHeight(LINE)
+  r:SetPoint("TOPLEFT", 0, -(i - 1) * LINE)
+  r:SetPoint("RIGHT", parent, "RIGHT")
+  r.right = text(r, 12, "medium", C.text)
+  r.right:SetPoint("RIGHT", -4, 0)
+  r.right:SetJustifyH("RIGHT")
+  r.left = text(r, 12, "regular", C.dim)
+  r.left:SetPoint("LEFT", 4, 0)
+  r.left:SetPoint("RIGHT", r.right, "LEFT", -8, 0)
+  r.left:SetJustifyH("LEFT")
+  return r
+end
+
 local function makeSettingsPane(p)
   local title = text(p, 16, "semibold", C.text)
   title:SetPoint("TOPLEFT", PAD, -14)
@@ -1033,12 +1283,19 @@ local function makeSettingsPane(p)
 
   local pasteB = button(p, "Paste a raid list", true, 150)
   pasteB:SetPoint("TOPLEFT", PAD, -240)
-  pasteB:SetScript("OnClick", openPaste)
+  pasteB:SetScript("OnClick", function() openPaste() end)
+  local pricesB = button(p, "Paste AH prices", false, 140)
+  pricesB:SetPoint("LEFT", pasteB, "RIGHT", 10, 0)
+  pricesB:SetScript("OnClick", function() openPaste("prices") end)
+  frame.prices = text(p, 11, "regular", C.muted)
+  frame.prices:SetPoint("TOPLEFT", PAD, -276)
+  frame.prices:SetPoint("RIGHT", -PAD, 0)
+  safe(frame.prices.SetWordWrap, frame.prices, true)
   local probeB = button(p, "Probe the game", false, 140)
-  probeB:SetPoint("LEFT", pasteB, "RIGHT", 10, 0)
+  probeB:SetPoint("TOPLEFT", PAD, -312)
   probeB:SetScript("OnClick", probe)
   local probeHint = text(p, 11, "regular", C.muted)
-  probeHint:SetPoint("TOPLEFT", PAD, -276)
+  probeHint:SetPoint("TOPLEFT", PAD, -346)
   probeHint:SetPoint("RIGHT", -PAD, 0)
   safe(probeHint.SetWordWrap, probeHint, true)
   probeHint:SetText("Probe makes a line that says which game functions this client has. Send it to Snitchbot when asked.")
@@ -1153,6 +1410,7 @@ local function makeFrame()
   makeRaidPane(panes.raid)
   makeXPPane(panes.xp)
   makeRunsPane(panes.runs)
+  makeStatsPane(panes.stats)
   makeSettingsPane(panes.settings)
   makeMinimapButton()
 
@@ -1265,9 +1523,11 @@ local function fillXP()
   local earned = money() - (s.moneyStart or money())
   local goldRate = seconds >= 60 and earned ~= 0 and (earned * 3600 / seconds) or nil
   x.gold:SetText((earned > 0 and "+" or "") .. ns.Money(earned) .. (goldRate and ("  ·  " .. ns.Money(goldRate) .. "/h") or ""))
+  x.value:SetText((s.value or 0) > 0 and ns.Money(s.value) or "–")
 
   local d = db()
   local run = d.run or runs()[1]
+  show(x.endRun, d.run ~= nil)
   x.runLabel:SetText(d.run and (d.run.leftAt and "THIS RUN · OUTSIDE" or "THIS RUN") or run and "LAST RUN" or "DUNGEON RUNS")
   if run then
     x.runName:SetText(run.name)
@@ -1318,13 +1578,160 @@ local function fillRuns()
   if r.scroll.place then r.scroll.place() end
 end
 
+-- How old something is: "3h old", "2 days old".
+local function age(t)
+  local secs = math.max(0, now() - (t or 0))
+  if secs < 3600 then return math.floor(secs / 60) .. " min old" end
+  if secs < 86400 then return math.floor(secs / 3600) .. "h old" end
+  return math.floor(secs / 86400) .. " days old"
+end
+
+local function fillStats()
+  local st, s, c, t, r = frame.st, session(), char(), now(), reading()
+  local lines = {}
+  local function head(label) lines[#lines + 1] = { head = label } end
+  local function row(left, right, color, rightColor) lines[#lines + 1] = { left = left, right = right, color = color, rightColor = rightColor } end
+  local function note(left) lines[#lines + 1] = { left = left, note = true } end
+  local done = runs()
+
+  -- Leveling
+  head("LEVELING")
+  local cur = c.levels[r.level]
+  row("Level " .. r.level, cur and (ns.Duration(cur.played or 0) .. " played at this level") or "–")
+  local target = math.min(60, (math.floor(r.level / 10) + 1) * 10)
+  local plan = r.max > 0 and ns.LevelPlan(c.levels, r.level, target, ns.PlayedPerDay(c.days, t)) or nil
+  if plan then
+    row("Average level", ns.Duration(plan.average) .. " played (" .. plan.measured .. (plan.measured == 1 and " level)" or " levels)"))
+    local when = plan.days and ("  ·  around " .. (safe(date, "%a %d %b", t + plan.days * 86400) or "")) or ""
+    row("Level " .. target, "about " .. ns.Duration(plan.played) .. " played" .. when)
+  else
+    note("Level once with Snitchbot on to see how long levels take.")
+  end
+  local recent = {}
+  for level, l in pairs(c.levels) do if l.ended and not l.partial then recent[#recent + 1] = level end end
+  table.sort(recent, function(a, b) return a > b end)
+  for i, level in ipairs(recent) do
+    if i > 5 then break end
+    row("Level " .. level, ns.Duration(c.levels[level].played or 0) .. "  ·  " .. (safe(date, "%b %d", c.levels[level].ended) or ""), C.muted)
+  end
+
+  -- XP and gold this session
+  local sources = ns.XPSources(s.xp, s.xpBy)
+  if #sources > 0 then
+    head("XP THIS SESSION")
+    for _, src in ipairs(sources) do
+      row(src.label, string.format("%s  ·  %d%%", ns.Num(src.xp), math.floor(src.xp * 100 / math.max(1, s.xp) + 0.5)))
+    end
+  end
+  head("GOLD THIS SESSION")
+  local any = false
+  for _, src in ipairs(ns.GOLD_SOURCES) do
+    local n = (s.gold or {})[src.key]
+    if n and n ~= 0 then
+      any = true
+      row(src.label, (n > 0 and "+" or "") .. ns.Money(n), nil, n > 0 and C.success or C.danger)
+    end
+  end
+  if not any then note("Nothing yet.") end
+  row("Your loot is worth", (s.value or 0) > 0 and ns.Money(s.value) or "–")
+  local prices = db().prices
+  if type(prices) == "table" and prices.house then
+    note("Auction prices from " .. prices.house .. ", " .. age(prices.at) .. ". Vendor price for the rest.")
+  else
+    note("Vendor prices. Paste auction prices in Settings for a truer value.")
+  end
+
+  -- Reputation this session
+  local reps = {}
+  for faction, n in pairs(s.rep or {}) do reps[#reps + 1] = { faction = faction, n = n } end
+  if #reps > 0 then
+    table.sort(reps, function(a, b) return a.n > b.n end)
+    head("REPUTATION THIS SESSION")
+    for _, x in ipairs(reps) do row(x.faction, (x.n > 0 and "+" or "") .. ns.Num(x.n)) end
+  end
+
+  -- Personal bests
+  local bests, order = ns.Bests(done)
+  if #order > 0 then
+    head("PERSONAL BESTS")
+    for _, key in ipairs(order) do
+      local b = bests[key]
+      local parts = {}
+      if b.fastest then parts[#parts + 1] = ns.Duration(b.fastest.ended - b.fastest.started) end
+      if b.rate then parts[#parts + 1] = ns.Num(b.rate) .. " XP/h" end
+      row(b.name or "Dungeon", #parts > 0 and table.concat(parts, "  ·  ") or "–")
+      note(string.format("%d %s%s", b.runs, b.runs == 1 and "run" or "runs", b.bosses > 0 and ("  ·  fastest with all " .. b.bosses .. " bosses") or ""))
+    end
+  end
+
+  -- Who you run with
+  local people = ns.GroupHistory(done)
+  if #people > 0 then
+    head("RAN WITH")
+    for i, g in ipairs(people) do
+      if i > 10 then break end
+      row(g.name .. " (" .. g.class .. ")", g.runs .. (g.runs == 1 and " run" or " runs"))
+    end
+  end
+
+  -- What bosses dropped
+  local loot = ns.BossLoot(done)
+  local shown = 0
+  for _, b in ipairs(loot) do
+    if #b.items > 0 and shown < 8 then
+      if shown == 0 then head("BOSS LOOT") end
+      shown = shown + 1
+      row(b.boss, b.kills .. (b.kills == 1 and " kill" or " kills"), C.text)
+      for i, item in ipairs(b.items) do
+        if i > 3 then break end
+        row("   " .. (QUALITY_HEX[item.q] or "") .. item.name .. "|r", item.n > 1 and ("x" .. item.n) or "")
+      end
+    end
+  end
+
+  st.sub:SetText(string.format("%s  ·  %d runs", me(), #done))
+  for _, x in ipairs(st.rows) do x:Hide() end
+  st.child:SetHeight(math.max(LINE, #lines * LINE))
+  for i, line in ipairs(lines) do
+    st.rows[i] = st.rows[i] or statRow(st.child, i)
+    local x = st.rows[i]
+    if line.head then
+      setFont(x.left, 11, "semibold")
+      x.left:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+      x.left:SetText(line.head)
+      x.right:SetText("")
+    else
+      setFont(x.left, line.note and 11 or 12, "regular")
+      local lc = line.color or (line.note and C.muted or C.dim)
+      x.left:SetTextColor(lc[1], lc[2], lc[3])
+      x.left:SetText(line.left)
+      local rc = line.rightColor or C.text
+      x.right:SetTextColor(rc[1], rc[2], rc[3])
+      x.right:SetText(line.right or "")
+    end
+    x:Show()
+  end
+  if st.scroll.place then st.scroll.place() end
+end
+
+local function fillSettings()
+  for _, b in ipairs(toggles) do b.sync() end
+  local p = db().prices
+  if frame.prices then
+    frame.prices:SetText(type(p) == "table" and p.house
+      and string.format("Prices: %s, %s items, %s.", p.house, ns.Num(p.count or 0), age(p.at))
+      or "No auction prices yet: loot is valued at what a vendor pays.")
+  end
+end
+
 update = function()
   if not frame or not frame:IsShown() then return end
   local tab = settings().tab
   if tab == "raid" then refresh()
   elseif tab == "xp" then fillXP()
   elseif tab == "runs" then fillRuns()
-  elseif tab == "settings" then for _, b in ipairs(toggles) do b.sync() end end
+  elseif tab == "stats" then fillStats()
+  elseif tab == "settings" then fillSettings() end
 end
 
 -- ---- Events and slash commands
@@ -1343,6 +1750,11 @@ events:SetScript("OnEvent", function(_, event, ...)
     makeFrame()
     xpNow = reading()
     session(true)
+    lastMoney = money()
+    lastTick = now()
+    local level = reading().level
+    if level > 0 and not char().levels[level] then char().levels[level] = { started = now(), played = 0, partial = true } end
+    if hooksecurefunc and RepairAllItems then pcall(hooksecurefunc, "RepairAllItems", function() goldCtx.repairAt = now() end) end
     cleanLoot()
     ns.MergeRuns(runs(), AWAY)
     if C_Timer and C_Timer.NewTicker then
@@ -1351,6 +1763,7 @@ events:SetScript("OnEvent", function(_, event, ...)
         -- Also ends a corpse run that went on too long, and starts the combat log if it didn't take.
         checkInstance(false)
         session()
+        tick()
         update()
       end)
     end
@@ -1384,10 +1797,29 @@ events:SetScript("OnEvent", function(_, event, ...)
     local name = msg:match(reset)
     local same = name and run and (name == run.name or name:find(run.name, 1, true) or run.name:find(name, 1, true))
     if run and run.leftAt and same then endRun(true) end
+    tally("xpBy", "explore", ns.ExploreXP(msg, ERR_ZONE_EXPLORED_XP))
   elseif event == "PLAYER_MONEY" then
     onMoney()
   elseif event == "GROUP_ROSTER_UPDATE" then
     noteGroup(db().run)
+  elseif event == "PLAYER_LEVEL_UP" then
+    onLevelUp((...))
+  elseif event == "QUEST_TURNED_IN" then
+    local _, xp = ...
+    goldCtx.questAt = now()
+    tally("xpBy", "quests", tonumber(xp))
+  elseif event == "CHAT_MSG_COMBAT_FACTION_CHANGE" then
+    local faction, n = ns.ParseRep((...), FACTION_STANDING_INCREASED, FACTION_STANDING_DECREASED)
+    tally("rep", faction, n)
+  elseif OPENS[event] then
+    setOpen(OPENS[event], true)
+  elseif CLOSES[event] then
+    setOpen(CLOSES[event], false)
+  elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" or event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then
+    local kind = interaction((...))
+    if kind then setOpen(kind, event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW") end
+  elseif event == "PLAYER_LOGOUT" then
+    tick()
   else
     soon()
   end
@@ -1395,7 +1827,10 @@ end)
 for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "PLAYERBANKSLOTS_CHANGED", "GET_ITEM_INFO_RECEIVED",
   "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_UNGHOST", "PLAYER_ALIVE", "PLAYER_XP_UPDATE",
   "CHAT_MSG_COMBAT_XP_GAIN", "PLAYER_DEAD", "ENCOUNTER_START", "ENCOUNTER_END", "CHAT_MSG_LOOT", "PLAYER_MONEY",
-  "GROUP_ROSTER_UPDATE", "CHAT_MSG_SYSTEM" }) do
+  "GROUP_ROSTER_UPDATE", "CHAT_MSG_SYSTEM", "PLAYER_LEVEL_UP", "QUEST_TURNED_IN", "CHAT_MSG_COMBAT_FACTION_CHANGE",
+  "MERCHANT_SHOW", "MERCHANT_CLOSED", "MAIL_SHOW", "MAIL_CLOSED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
+  "TRAINER_SHOW", "TRAINER_CLOSED", "TAXIMAP_OPENED", "TAXIMAP_CLOSED", "TRADE_SHOW", "TRADE_CLOSED",
+  "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_LOGOUT" }) do
   pcall(events.RegisterEvent, events, e)
 end
 
@@ -1409,7 +1844,13 @@ SlashCmdList.SNITCHBOT = function(msg)
     openPaste()
   elseif cmd == "probe" then
     probe()
-  elseif cmd == "xp" or cmd == "runs" or cmd == "settings" or cmd == "raid" then
+  elseif cmd == "prices" then
+    openPaste("prices")
+  elseif cmd == "check" or cmd == "buffs" then
+    buffCheck()
+  elseif cmd == "export" then
+    exportCode()
+  elseif cmd == "xp" or cmd == "runs" or cmd == "stats" or cmd == "settings" or cmd == "raid" then
     frame:Show()
     selectTab(cmd)
   else

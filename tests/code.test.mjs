@@ -12,7 +12,7 @@ const file = (f) => readFileSync(new URL(`../Snitchbot/${f}`, import.meta.url), 
 function run(script, { ui = false } = {}) {
   const L = lauxlib.luaL_newstate();
   lualib.luaL_openlibs(L);
-  for (const [name, src] of [["CODE_LUA", file("Code.lua")], ["TRACKER_LUA", file("Tracker.lua")], ["UI_LUA", file("Snitchbot.lua")]]) {
+  for (const [name, src] of [["CODE_LUA", file("Code.lua")], ["TRACKER_LUA", file("Tracker.lua")], ["STATS_LUA", file("Stats.lua")], ["UI_LUA", file("Snitchbot.lua")]]) {
     lua.lua_pushstring(L, to_luastring(src));
     lua.lua_setglobal(L, to_luastring(name));
   }
@@ -20,6 +20,7 @@ function run(script, { ui = false } = {}) {
     ns = {}
     assert(load(CODE_LUA, "Code.lua"))("Snitchbot", ns)
     assert(load(TRACKER_LUA, "Tracker.lua"))("Snitchbot", ns)
+    assert(load(STATS_LUA, "Stats.lua"))("Snitchbot", ns)
     ${ui ? `${FAKE_UI}\n assert(load(UI_LUA, "Snitchbot.lua"))("Snitchbot", ns)` : ""}
   `;
   if (lauxlib.luaL_dostring(L, to_luastring(`${prelude}\n${script}`)) !== lua.LUA_OK) {
@@ -394,4 +395,134 @@ test("the window comes back where you dragged it", () => {
     return table.concat({ first, saved, again }, "|")
   `, { ui: true });
   assert.equal(out, "CENTER,300,40|TOPLEFT,TOPLEFT,120,-81|TOPLEFT,TOPLEFT,120,-81");
+});
+
+test("stats: prices code, bests, verdicts, group history and boss loot", () => {
+  const out = run(`
+    local p = ns.ParsePrices("SNITCHBOT:PRICES:1;EU-NORMAL-HORDE;1794800000;" .. ns.B36(6557) .. "." .. ns.B36(12345) .. ",2s.1;END")
+    local bad = select(2, ns.ParsePrices("SNITCHBOT:PRICES:1;EU;1;2s.1"))
+    local function r(started, secs, xp, bosses, group, loot)
+      local b = {}
+      for i = 1, bosses do b[i] = { name = "Boss" .. i, kill = true } end
+      return { name = "Deadmines", key = "36", started = started, ended = started + secs, xp = xp, kills = 10, bosses = b, group = group, loot = loot or {} }
+    end
+    local old = r(1000, 2400, 6000, 6, { Nonut = "Rogue", Von = "Warrior" }, { { id = 6557, name = "Bard's Boots", q = 2, boss = "Boss2" } })
+    local partial = r(5000, 600, 3000, 3, { Nonut = "Rogue" })
+    local fast = r(9000, 2100, 6000, 6, { Finwea = "Hunter" }, { { id = 6557, name = "Bard's Boots", q = 2, boss = "Boss2" }, { id = 1, name = "Gloves", q = 3, boss = "Boss2" } })
+    local list = { fast, partial, old }
+    local bests, order = ns.Bests(list)
+    local b = bests["36"]
+    local slow = r(12000, 2700, 3000, 6, {})
+    local g = ns.GroupHistory(list)
+    local loot = ns.BossLoot(list)
+    return table.concat({ p.house, p.at, p.count, p.prices[6557], tostring(bad), #order, b.runs, b.bosses, b.fastest == fast and "fast" or "?",
+      math.floor(b.rate), ns.RunVerdict(fast, { fast, partial, old }), ns.RunVerdict(slow, { slow, fast, partial, old }),
+      g[1].name .. g[1].runs, g[2].name, loot[1].boss, loot[2].boss, #loot[2].items, loot[2].items[1].name, loot[2].items[2].n }, "|")
+  `);
+  assert.equal(out, "EU-NORMAL-HORDE|1794800000|2|12345|The price code is cut off. Copy it again.|1|3|6|fast|18000|New best for Deadmines: 35m (was 40m).|10m slower than last time.|Nonut2|Finwea|Boss1|Boss2|2|Gloves|2");
+});
+
+test("stats: XP bonus, exploring, reputation, gold sources, durability", () => {
+  const out = run(`
+    local ctx = { open = nil, recent = "taxi", recentAt = 100, questAt = 50, repairAt = 10 }
+    local slots = { { cur = 30, max = 100 }, { cur = 0, max = 50 }, { cur = 80, max = 80 } }
+    local low, broken = ns.Durability(slots)
+    local name, n = ns.ParseRep("Reputation with Stormwind increased by 25.")
+    local name2, n2 = ns.ParseRep("Your Gelkis Clan Centaur reputation has decreased by 10.", "Your %s reputation has increased by %d.", "Your %s reputation has decreased by %d.")
+    local src = ns.XPSources(1000, { kills = 600, quests = 300 })
+    return table.concat({ ns.XPBonus("Defias Thug dies, you gain 135 experience. (+45 exp Rested bonus, +12 group bonus)"),
+      ns.ExploreXP("Discovered Westfall: 120 experience gained"), name, n, name2, n2,
+      ns.GoldSource(ctx, -500, 101), ns.GoldSource(ctx, 200, 51), ns.GoldSource({ repairAt = 10 }, -300, 11), ns.GoldSource({}, 40, 500),
+      ns.GoldSource({ open = "merchant" }, 900, 1), ns.GoldSource({}, -40, 500), low, broken, #src, src[3].key, src[3].xp }, "|")
+  `);
+  assert.equal(out, "57|120|Stormwind|25|Gelkis Clan Centaur|-10|flights|quests|repairs|loot|vendor|other|0.0|1|3|other|100");
+});
+
+test("stats: level plan, played per day, buff check and the character code", () => {
+  const out = run(`
+    local levels = { [18] = { played = 3600, ended = 1, started = 0 }, [19] = { played = 3600 * 1.5, ended = 2, started = 1 },
+      [20] = { played = 1800, partial = true, ended = 3 }, [21] = { played = 600, started = 3 } }
+    local plan = ns.LevelPlan(levels, 21, 23, 7200)
+    local day = 1794800000 / 86400
+    local perDay = ns.PlayedPerDay({ [math.floor(day)] = 3600, [math.floor(day) - 2] = 1800, [math.floor(day) - 30] = 99999 }, 1794800000)
+    local a = ns.BuffCheck({ { spellId = 17626, name = "Flask of the Titans" }, { spellId = 1, name = "Well Fed" }, { spellId = 22888 } })
+    local b = ns.BuffCheck({ { spellId = 17538, name = "Elixir of the Mongoose" } })
+    local report = ns.BuffReport({ { name = "Lill", buffs = a }, { name = "Nonut", buffs = b }, { name = "Von", away = true } })
+    local code = ns.CharCode({ region = "eu", name = "Lill Slampan", class = "WARRIOR", level = 21, now = 1794800000,
+      levels = { [20] = { played = 3600, started = 1794700000 } },
+      runs = { { name = "The Deadmines", started = 1794790000, ended = 1794792460, kills = 156, xp = 6685, money = -50, deaths = 1,
+        bosses = { { kill = true }, { kill = false } }, loot = { {} }, value = 999 } },
+      gold = { loot = 500, repairs = -120 }, xp = { kills = 6000 }, rep = { ["Stormwind"] = 25 } })
+    return table.concat({ math.floor(plan.average), plan.measured, math.floor(plan.played), string.format("%.2f", plan.days), math.floor(perDay),
+      tostring(a.flask), a.food and "fed" or "-", a.world, b.elixirs, report[2], report[3], report[4], report[6] }, "|") .. "\\n" .. code
+  `);
+  const [first, code] = out.split("\n");
+  // 2 levels measured (18, 19): 4,500s on average at level 18.5; levels 21 and 22 scaled by level, minus the 600s already played at 21.
+  assert.equal(first, "4500|2|9859|1.37|1800|true|fed|1|1|No flask (1): Nonut|No flask or elixir: everyone|Not well fed (1): Nonut|Too far away to check: Von");
+  assert.equal(code, "SNITCHBOT:CHAR:1;eu;Lill Slampan;WARRIOR;21;1794800000;20.3600.1794700000;The Deadmines.1794790000.2460.156.6685.-50.1.1.2.1.999;loot.500,repairs.-120;kills.6000;Stormwind.25;END");
+});
+
+test("the addon tallies gold, XP and loot value, ends a run on request, and fills the Stats tab", () => {
+  const out = run(`
+    CLOCK, INSIDE, LEVEL, XP, MONEY = 1794800000, true, 21, 1000, 10000
+    time = function() return CLOCK end
+    IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
+    GetInstanceInfo = function() return "Deadmines", "party", 1, "Normal", 5, 0, false, 36 end
+    UnitLevel = function() return LEVEL end
+    UnitXP = function() return XP end
+    UnitXPMax = function() return 5000 end
+    UnitIsDeadOrGhost = function() return false end
+    GetMoney = function() return MONEY end
+    LoggingCombat = function(on) if on ~= nil then LOGGING = on end return LOGGING end
+    GetInventoryItemDurability = function(slot) if slot == 5 then return 10, 100 end end
+    C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 13 end end
+    SnitchbotDB = { lists = {}, settings = { tab = "stats", open = true } }
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    local gearWarning = SAID[#SAID - 1]
+    -- prices pasted: Bard's Boots at 1g
+    SnitchbotFrame.scripts.OnShow()
+    SlashCmdList.SNITCHBOT("prices")
+    SnitchbotPasteFrame.edit.text = "SNITCHBOT:PRICES:1;EU-NORMAL-HORDE;" .. CLOCK .. ";" .. ns.B36(6557) .. "." .. ns.B36(10000) .. ";END"
+    SnitchbotPasteFrame.ok.scripts.OnClick()
+    e.scripts.OnEvent(e, "CHAT_MSG_COMBAT_XP_GAIN", "Defias Thug dies, you gain 135 experience. (+20 exp Rested bonus)")
+    XP = 1155
+    e.scripts.OnEvent(e, "PLAYER_XP_UPDATE", "player")
+    e.scripts.OnEvent(e, "ENCOUNTER_START", 1, "Rhahk'Zor", 1, 5)
+    CLOCK = CLOCK + 50
+    e.scripts.OnEvent(e, "ENCOUNTER_END", 1, "Rhahk'Zor", 1, 5, 1)
+    e.scripts.OnEvent(e, "CHAT_MSG_LOOT", "You receive loot: |cff1eff00|Hitem:6557::::|h[Bard's Boots of Spirit]|h|r.", "Vitoc War")
+    e.scripts.OnEvent(e, "CHAT_MSG_LOOT", "You receive loot: |cffffffff|Hitem:2589::::|h[Linen Cloth]|h|rx2.", "Vitoc War")
+    MONEY = 10500
+    e.scripts.OnEvent(e, "PLAYER_MONEY")
+    e.scripts.OnEvent(e, "MERCHANT_SHOW")
+    MONEY = 12000
+    e.scripts.OnEvent(e, "PLAYER_MONEY")
+    e.scripts.OnEvent(e, "MERCHANT_CLOSED")
+    e.scripts.OnEvent(e, "QUEST_TURNED_IN", 123, 400, 2500)
+    MONEY = 14500
+    e.scripts.OnEvent(e, "PLAYER_MONEY")
+    XP = 1555
+    e.scripts.OnEvent(e, "PLAYER_XP_UPDATE", "player")
+    e.scripts.OnEvent(e, "CHAT_MSG_COMBAT_FACTION_CHANGE", "Reputation with Stormwind increased by 25.")
+    CLOCK = CLOCK + 3600 -- no 30s ticker in the fake game: played time counts at most 2 minutes per gap
+    e.scripts.OnEvent(e, "PLAYER_LEVEL_UP", 22)
+    LEVEL = 22
+    local s = SnitchbotDB.session
+    local run = SnitchbotDB.run
+    local summary = table.concat({ s.gold.loot, s.gold.vendor, s.gold.quests, s.xpBy.kills, s.xpBy.quests, s.rep.Stormwind, s.value, run.value,
+      run.loot[1].boss, SnitchbotDB.chars["Vitoc War"].levels[21].ended - 1794800000, tostring(SnitchbotDB.chars["Vitoc War"].levels[22] ~= nil) }, ",")
+    -- End run: over now, and no new run while still inside.
+    SnitchbotFrame.x.endRun.scripts.OnClick()
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
+    local afterEnd = tostring(SnitchbotDB.run) .. "," .. #SnitchbotDB.runs
+    SlashCmdList.SNITCHBOT("stats")
+    local rows = 0
+    for _, r in ipairs(SnitchbotFrame.st.rows) do if r.shown then rows = rows + 1 end end
+    SlashCmdList.SNITCHBOT("export")
+    local code = SnitchbotPasteFrame.edit.text
+    return table.concat({ gearWarning, summary, afterEnd, tostring(rows > 10), code:sub(1, 52) }, "|")
+  `, { ui: true });
+  assert.equal(out, "|cffe0b04aSnitchbot:|r Your gear is at 10% durability. Repair before you pull.|500,1500,2500,155,400,25,10026,10026,Rhahk'Zor,3650,true|nil,1|true|SNITCHBOT:CHAR:1;eu;Vitoc War;;22;1794803650;21.120.");
 });

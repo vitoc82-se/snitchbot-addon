@@ -373,3 +373,25 @@ test("a dungeon reset makes the next visit a new run", () => {
   `, { ui: true });
   assert.equal(out, "nil|2");
 });
+
+test("the window comes back where you dragged it", () => {
+  const out = run(`
+    local made = CreateFrame
+    CreateFrame = function(kind, name, ...)
+      local w = made(kind, name, ...)
+      if name == "SnitchbotFrame" then rawset(w, "SetPoint", function(self, ...) self.at = { ... } end) end
+      return w
+    end
+    SnitchbotDB = { lists = {} }
+    SnitchbotEvents.scripts.OnEvent(SnitchbotEvents, "PLAYER_LOGIN")
+    local f = SnitchbotFrame
+    local first = f.at[1] .. "," .. f.at[4] .. "," .. f.at[5]
+    rawset(f, "GetPoint", function() return "TOPLEFT", UIParent, "TOPLEFT", 120.4, -80.6 end)
+    f.header.scripts.OnDragStop()
+    local saved = table.concat(SnitchbotDB.settings.pos.SnitchbotFrame, ",")
+    SnitchbotEvents.scripts.OnEvent(SnitchbotEvents, "PLAYER_LOGIN") -- as after a /reload
+    local again = SnitchbotFrame.at[1] .. "," .. SnitchbotFrame.at[3] .. "," .. SnitchbotFrame.at[4] .. "," .. SnitchbotFrame.at[5]
+    return table.concat({ first, saved, again }, "|")
+  `, { ui: true });
+  assert.equal(out, "CENTER,300,40|TOPLEFT,TOPLEFT,120,-81|TOPLEFT,TOPLEFT,120,-81");
+});

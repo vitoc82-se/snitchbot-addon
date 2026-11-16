@@ -183,6 +183,18 @@ local function mark(parent)
 end
 
 -- The window: ground, hairline, soft shadow, and a header you drag it by.
+-- Where you last dragged the window, or the default spot.
+local function place(f, name, point, x, y)
+  local s = db().settings
+  local p = type(s) == "table" and type(s.pos) == "table" and s.pos[name]
+  f:ClearAllPoints()
+  if type(p) == "table" and type(p[1]) == "string" then
+    f:SetPoint(p[1], UIParent, p[2] or p[1], tonumber(p[3]) or 0, tonumber(p[4]) or 0)
+  else
+    f:SetPoint(point, UIParent, point, x, y)
+  end
+end
+
 local function window(name, width, height, strata, keepOnEscape)
   local f = CreateFrame("Frame", name, UIParent)
   f:SetSize(width, height)
@@ -208,7 +220,19 @@ local function window(name, width, height, strata, keepOnEscape)
   header:EnableMouse(true)
   header:RegisterForDrag("LeftButton")
   header:SetScript("OnDragStart", function() f:StartMoving() end)
-  header:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+  header:SetScript("OnDragStop", function()
+    f:StopMovingOrSizing()
+    -- Remembered here: the game's own layout cache skips windows made after login, like these.
+    safe(f.SetUserPlaced, f, false)
+    local point, _, relPoint, x, y = f:GetPoint()
+    if point and x and y then
+      local d = db()
+      d.settings = type(d.settings) == "table" and d.settings or {}
+      d.settings.pos = type(d.settings.pos) == "table" and d.settings.pos or {}
+      d.settings.pos[name] = { point, relPoint or point, math.floor(x + 0.5), math.floor(y + 0.5) }
+    end
+  end)
+  f.header = header
   mark(header):SetPoint("LEFT", PAD - 1, 0)
   f.title = text(header, 13, "semibold", C.text)
   f.title:SetPoint("LEFT", PAD + 14, 0)
@@ -315,7 +339,7 @@ end
 
 local function makePaste()
   paste = window("SnitchbotPasteFrame", 460, 250, "DIALOG")
-  paste:SetPoint("CENTER", 0, 60)
+  place(paste, "SnitchbotPasteFrame", "CENTER", 0, 60)
   paste.hint = text(paste, 12, "regular", C.dim)
   paste.hint:SetPoint("TOPLEFT", PAD, -46)
   paste.hint:SetPoint("TOPRIGHT", -PAD, -46)
@@ -1114,7 +1138,7 @@ end
 
 local function makeFrame()
   frame = window("SnitchbotFrame", WIDTH, HEIGHT, "MEDIUM", true)
-  frame:SetPoint("CENTER", 300, 40)
+  place(frame, "SnitchbotFrame", "CENTER", 300, 40)
   frame.title:SetText("Snitchbot")
   -- × only hides it; it stays shut until you open it again.
   frame.close:SetScript("OnClick", function() frame:Hide(); settings().open = false end)

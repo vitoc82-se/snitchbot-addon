@@ -2,9 +2,12 @@
 
 The in-game half of [Snitchbot](https://forever.snitchbot.app) for WoW Forever.
 
-- `/sb` shows your raid shopping list: what to bring, how many you have in bags and bank, what's missing.
-- `/sb paste` adds a list. Copy it from **Raid list** on [auction.snitchbot.app](https://auction.snitchbot.app) with **Copy for the addon**.
-- `/sb probe` makes a line to send to Snitchbot: which game functions this client has.
+One window with four tabs. Open it with the minimap button (or `/sb`); it stays open over reloads until you close it.
+
+- **Raid list**: what to bring for raid night, how many you have in bags and bank, what's missing. **New list** pastes the code from **Raid list** on [auction.snitchbot.app](https://auction.snitchbot.app) (**Copy for the addon**).
+- **XP**: XP per hour, time to next level, kills, and the current dungeon run.
+- **Runs**: every dungeon run: time, kills, XP, XP per hour and deaths. Runs start and end by themselves.
+- **Settings**: start the combat log in dungeons, open on entering a dungeon, the minimap button, and **Probe the game**.
 
 ## Development
 

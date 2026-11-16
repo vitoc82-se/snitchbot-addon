@@ -1,9 +1,11 @@
 ## Interface: 16001
 ## Title: Snitchbot
-## Notes: Your guild's raid shopping list, XP per hour and dungeon runs from Snitchbot. Type /sb.
+## Notes: Your guild's raid shopping list, XP per hour and dungeon runs from Snitchbot. Click the minimap button.
 ## Author: Snitchbot
 ## Version: @project-version@
 ## SavedVariables: SnitchbotDB
+## IconTexture: Interface\Icons\INV_Misc_Spyglass_02
+## AddonCompartmentFunc: SnitchbotToggle
 ## X-Website: https://forever.snitchbot.app
 ## X-Curse-Project-ID: 1806816
 

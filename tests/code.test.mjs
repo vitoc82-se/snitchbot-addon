@@ -230,3 +230,20 @@ test("a dungeon run starts on entering, counts kills and XP, and ends on leaving
   assert.match(out, /^true\|false\|The Deadmines\|1\|135\|1\|1\|nil\|/);
   assert.match(out, /The Deadmines: 40m, 1 kills, 135 XP, 203 XP\/h\.\|.*Combat log off\.$/);
 });
+
+test("one window: remembers it was open, switches tabs, and × keeps it shut", () => {
+  const out = run(`
+    UnitLevel = function() return 23 end
+    UnitXP = function() return 1000 end
+    UnitXPMax = function() return 4000 end
+    SnitchbotDB = { lists = {}, settings = { open = true, tab = "xp" } }
+    SnitchbotEvents.scripts.OnEvent(SnitchbotEvents, "PLAYER_LOGIN")
+    local f = SnitchbotFrame
+    local openAtLogin, level, pct = tostring(f.shown), f.x.level.text, f.x.pct.text
+    SlashCmdList.SNITCHBOT("runs")
+    local runsTitle, empty = f.r.title.text, tostring(f.r.empty.shown)
+    f.close.scripts.OnClick()
+    return table.concat({ openAtLogin, level, pct, runsTitle, empty, tostring(f.shown), tostring(SnitchbotDB.settings.open), SnitchbotDB.settings.tab }, "|")
+  `, { ui: true });
+  assert.equal(out, "true|Level 23|25.0%|Dungeon runs|true|false|false|runs");
+});

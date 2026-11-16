@@ -54,33 +54,35 @@ local function currentList()
   return d.lists[me()] or (d.last and d.lists[d.last]) or nil
 end
 
--- ---- Look: a night-blue flat window, hairlines, one gold accent, Inter.
+-- ---- Look: snitchbot.app's own. Charcoal, one gold accent, Geist, pill tabs, stat cards.
 
 local MEDIA = "Interface\\AddOns\\" .. ADDON .. "\\Media\\"
 local FONT = {
-  regular = MEDIA .. "Fonts\\Inter-Regular.ttf",
-  medium = MEDIA .. "Fonts\\Inter-Medium.ttf",
-  semibold = MEDIA .. "Fonts\\Inter-SemiBold.ttf",
+  regular = MEDIA .. "Fonts\\Geist-Regular.ttf",
+  medium = MEDIA .. "Fonts\\Geist-Medium.ttf",
+  semibold = MEDIA .. "Fonts\\Geist-SemiBold.ttf",
 }
 
 local C = {
-  ground = { 0.095, 0.115, 0.178, 0.97 },
-  header = { 0.072, 0.088, 0.14, 1 },
-  footer = { 0.08, 0.097, 0.151, 1 },
-  well = { 0.055, 0.068, 0.11, 1 },
-  shadow = { 0, 0, 0.02, 0.45 },
-  text = { 0.967, 0.974, 0.991, 1 },
-  dim = { 0.765, 0.793, 0.868, 1 },
-  muted = { 0.606, 0.637, 0.726, 1 },
-  accent = { 0.9, 0.73, 0.4, 1 },
-  onAccent = { 0.04, 0.05, 0.08, 1 },
-  success = { 0.42, 0.85, 0.6, 1 },
-  danger = { 0.96, 0.45, 0.45, 1 },
+  ground = { 0.078, 0.09, 0.118, 0.97 }, -- #14171e
+  header = { 0.051, 0.059, 0.078, 1 }, -- #0d0f14, the site's background
+  footer = { 0.051, 0.059, 0.078, 1 },
+  well = { 0.051, 0.059, 0.078, 1 },
+  card = { 0.11, 0.129, 0.169, 1 }, -- #1c212b
+  shadow = { 0, 0, 0, 0.5 },
+  text = { 0.902, 0.91, 0.933, 1 }, -- #e6e8ee
+  dim = { 0.722, 0.741, 0.792, 1 },
+  muted = { 0.545, 0.576, 0.655, 1 }, -- #8b93a7
+  accent = { 0.878, 0.69, 0.29, 1 }, -- #e0b04a
+  accentLit = { 0.922, 0.757, 0.388, 1 },
+  onAccent = { 0.102, 0.078, 0.024, 1 }, -- #1a1406
+  success = { 0.361, 0.761, 0.431, 1 },
+  danger = { 0.925, 0.353, 0.373, 1 },
   item = { 0.78, 0.68, 1, 1 },
-  border = { 1, 1, 1, 0.14 },
-  line = { 1, 1, 1, 0.1 },
-  hover = { 1, 1, 1, 0.07 },
-  track = { 1, 1, 1, 0.1 },
+  border = { 0.165, 0.192, 0.251, 1 }, -- #2a3140
+  line = { 0.137, 0.161, 0.216, 1 },
+  hover = { 1, 1, 1, 0.05 },
+  track = { 0.165, 0.192, 0.251, 1 },
 }
 
 local function show(f, on)
@@ -127,7 +129,7 @@ local function divider(f, y)
   return t
 end
 
--- Inter when the game takes it, else the game's own font.
+-- Geist when the game takes it, else the game's own font.
 local function setFont(fs, size, weight)
   if not safe(fs.SetFont, fs, FONT[weight or "regular"], size, "") then
     safe(fs.SetFontObject, fs, size >= 14 and GameFontNormalLarge or GameFontHighlight)
@@ -143,12 +145,12 @@ local function text(parent, size, weight, color, layer)
   return fs
 end
 
--- Flat buttons: gold for the main action, an outline for the rest.
+-- Flat buttons: gold for the main action, a card with an outline for the rest.
 local function button(parent, label, primary, width)
   local b = CreateFrame("Button", nil, parent)
   b:SetSize(width or 120, 26)
-  local rest = primary and C.accent or { 1, 1, 1, 0.04 }
-  local lit = primary and { 0.96, 0.8, 0.48, 1 } or { 1, 1, 1, 0.1 }
+  local rest = primary and C.accent or C.card
+  local lit = primary and C.accentLit or C.border
   b.bg = fill(b, rest)
   b.bg:SetAllPoints()
   if not primary then hairline(b, C.border) end
@@ -174,11 +176,10 @@ local function headerButton(parent, glyph, size)
   return b
 end
 
--- A small gold diamond, the mark in front of the window's title.
+-- A short gold bar, the mark in front of the window's title.
 local function mark(parent)
   local t = fill(parent, C.accent, "ARTWORK")
-  t:SetSize(7, 7)
-  safe(t.SetRotation, t, math.rad(45))
+  t:SetSize(3, 14)
   return t
 end
 
@@ -233,9 +234,9 @@ local function window(name, width, height, strata, keepOnEscape)
     end
   end)
   f.header = header
-  mark(header):SetPoint("LEFT", PAD - 1, 0)
+  mark(header):SetPoint("LEFT", PAD, 0)
   f.title = text(header, 13, "semibold", C.text)
-  f.title:SetPoint("LEFT", PAD + 14, 0)
+  f.title:SetPoint("LEFT", PAD + 11, 0)
   f.close = headerButton(header, "×", 18)
   f.close:SetPoint("RIGHT", -6, 0)
   f.close:SetScript("OnClick", function() f:Hide() end)
@@ -250,7 +251,7 @@ local function scrollArea(parent, step)
   local child = CreateFrame("Frame", nil, sf)
   child:SetSize(1, 1)
   sf:SetScrollChild(child)
-  local thumb = fill(sf, { 1, 1, 1, 0.22 }, "OVERLAY")
+  local thumb = fill(sf, C.border, "OVERLAY")
   thumb:SetWidth(3)
   thumb:Hide()
   local function place()
@@ -905,7 +906,7 @@ local function probe()
   showCopy("Snitchbot probe", code)
 end
 
--- ---- The window: one window, four tabs, everything a click away.
+-- ---- The window: one window, five tabs, everything a click away.
 
 local TABS = {
   { key = "raid", label = "Raid list" },
@@ -917,17 +918,6 @@ local TABS = {
 local TOP = 66 -- header and tab bar
 local HEIGHT = 470
 local panes, tabButtons = {}, {}
-
--- A label on the left and a value on the right, at y in pane.
-local function stat(parent, y, label)
-  local l = text(parent, 12, "regular", C.muted)
-  l:SetPoint("TOPLEFT", PAD, y)
-  l:SetText(label)
-  local v = text(parent, 12, "medium", C.text)
-  v:SetPoint("TOPRIGHT", -PAD, y)
-  v:SetJustifyH("RIGHT")
-  return v
-end
 
 local function smallButton(parent, label, width)
   local b = button(parent, label, false, width or 90)
@@ -1039,6 +1029,23 @@ end
 
 local XPW = WIDTH - 2 * PAD
 
+-- A stat card: a small label over a big number. Returns the number and the label.
+local CARD_GAP, CARD_H = 8, 42
+local CARD_W = (XPW - CARD_GAP) / 2
+local function card(parent, col, row, y, label)
+  local c = CreateFrame("Frame", nil, parent)
+  c:SetSize(CARD_W, CARD_H)
+  c:SetPoint("TOPLEFT", PAD + col * (CARD_W + CARD_GAP), y - row * (CARD_H + 6))
+  fill(c, C.card):SetAllPoints()
+  local l = text(c, 11, "regular", C.muted)
+  l:SetPoint("TOPLEFT", 10, -6)
+  l:SetText(label)
+  local v = text(c, 15, "semibold", C.text)
+  v:SetPoint("TOPLEFT", 10, -21)
+  v:SetPoint("RIGHT", -8, 0)
+  return v, l
+end
+
 local function makeXPPane(p)
   local x = {}
   frame.x = x
@@ -1048,28 +1055,28 @@ local function makeXPPane(p)
   x.pct:SetPoint("TOPRIGHT", -PAD, -17)
   x.pct:SetJustifyH("RIGHT")
   local track = fill(p, C.track, "ARTWORK")
-  track:SetHeight(4)
+  track:SetHeight(5)
   track:SetPoint("TOPLEFT", PAD, -40)
   track:SetWidth(XPW)
   x.rested = fill(p, { 0.47, 0.6, 1, 0.45 }, "ARTWORK", 1)
-  x.rested:SetHeight(4)
+  x.rested:SetHeight(5)
   x.rested:SetPoint("LEFT", track, "LEFT")
   x.bar = fill(p, C.accent, "OVERLAY")
-  x.bar:SetHeight(4)
+  x.bar:SetHeight(5)
   x.bar:SetPoint("LEFT", track, "LEFT")
   x.xp = text(p, 11, "regular", C.muted)
   x.xp:SetPoint("TOPLEFT", PAD, -52)
   x.xp:SetPoint("RIGHT", -PAD, 0)
 
-  divider(p, -74)
-  x.rate = stat(p, -88, "XP per hour")
-  x.ttl = stat(p, -110, "To next level")
-  x.kills = stat(p, -132, "Kills")
-  x.gold = stat(p, -154, "Gold")
-  x.value = stat(p, -176, "Your loot is worth")
-  x.time = stat(p, -198, "Session")
+  x.rate = card(p, 0, 0, -76, "XP per hour")
+  x.ttl = card(p, 1, 0, -76, "To next level")
+  x.gold, x.goldLabel = card(p, 0, 1, -76, "Gold")
+  x.value = card(p, 1, 1, -76, "Your loot is worth")
+  x.kills = card(p, 0, 2, -76, "Kills")
+  x.time = card(p, 1, 2, -76, "Session")
+  x.value:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   local reset = smallButton(p, "Reset session", 104)
-  reset:SetPoint("TOPRIGHT", -PAD, -222)
+  reset:SetPoint("TOPRIGHT", -PAD, -224)
   reset:SetScript("OnClick", function() resetSession(); update() end)
   divider(p, -254)
 
@@ -1316,24 +1323,26 @@ local function makeTabs()
   under:SetHeight(1)
   under:SetPoint("BOTTOMLEFT")
   under:SetPoint("BOTTOMRIGHT")
-  local x = PAD - 6
+  local x = PAD - 4
   for _, t in ipairs(TABS) do
     local b = CreateFrame("Button", nil, bar)
-    b.label = text(b, 12, "medium", C.muted)
-    b.label:SetPoint("CENTER", 0, 1)
+    b.label = text(b, 12, "semibold", C.muted)
+    b.label:SetPoint("CENTER", 0, 0)
     b.label:SetJustifyH("CENTER")
     b.label:SetText(t.label)
-    local w = math.max(48, (tonumber(safe(b.label.GetStringWidth, b.label)) or 40) + 20)
+    local w = math.max(40, (tonumber(safe(b.label.GetStringWidth, b.label)) or 40) + 22)
     b:SetSize(w, TOP - 34)
     b:SetPoint("BOTTOMLEFT", x, 0)
-    x = x + w + 2
-    b.line = fill(b, C.accent, "OVERLAY")
-    b.line:SetHeight(2)
-    b.line:SetPoint("BOTTOMLEFT", 6, 0)
-    b.line:SetPoint("BOTTOMRIGHT", -6, 0)
+    x = x + w + 4
+    b.pill = fill(b, C.accent, "BACKGROUND", 1)
+    b.pill:SetPoint("TOPLEFT", 0, -6)
+    b.pill:SetPoint("BOTTOMRIGHT", 0, 6)
+    b.hover = fill(b, C.card, "BACKGROUND")
+    b.hover:SetAllPoints(b.pill)
+    b.hover:Hide()
     b:SetScript("OnClick", function() selectTab(t.key) end)
-    b:SetScript("OnEnter", function() if settings().tab ~= t.key then b.label:SetTextColor(C.text[1], C.text[2], C.text[3]) end end)
-    b:SetScript("OnLeave", function() if settings().tab ~= t.key then b.label:SetTextColor(C.muted[1], C.muted[2], C.muted[3]) end end)
+    b:SetScript("OnEnter", function() if settings().tab ~= t.key then b.hover:Show(); b.label:SetTextColor(C.text[1], C.text[2], C.text[3]) end end)
+    b:SetScript("OnLeave", function() b.hover:Hide(); if settings().tab ~= t.key then b.label:SetTextColor(C.muted[1], C.muted[2], C.muted[3]) end end)
     tabButtons[t.key] = b
   end
 end
@@ -1433,9 +1442,10 @@ selectTab = function(key)
   settings().tab = key
   for k, p in pairs(panes) do show(p, k == key) end
   for k, b in pairs(tabButtons) do
-    local c = k == key and C.text or C.muted
+    local c = k == key and C.onAccent or C.muted
     b.label:SetTextColor(c[1], c[2], c[3])
-    show(b.line, k == key)
+    show(b.pill, k == key)
+    b.hover:Hide()
   end
   update()
 end
@@ -1522,7 +1532,8 @@ local function fillXP()
   x.time:SetText(ns.Duration(seconds))
   local earned = money() - (s.moneyStart or money())
   local goldRate = seconds >= 60 and earned ~= 0 and (earned * 3600 / seconds) or nil
-  x.gold:SetText((earned > 0 and "+" or "") .. ns.Money(earned) .. (goldRate and ("  ·  " .. ns.Money(goldRate) .. "/h") or ""))
+  x.gold:SetText((earned > 0 and "+" or "") .. ns.Money(earned))
+  x.goldLabel:SetText(goldRate and ("Gold  ·  " .. ns.Money(goldRate) .. "/h") or "Gold")
   x.value:SetText((s.value or 0) > 0 and ns.Money(s.value) or "–")
 
   local d = db()

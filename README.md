@@ -22,5 +22,5 @@ Slash commands, all optional: `/sb` (open or close), `/sb xp`, `/sb runs`, `/sb 
 
 ## Credits
 
-- The window's look follows [Polestar](https://github.com/fitzforge/polestar)'s night style. The code is Snitchbot's own.
-- [Inter](https://github.com/rsms/inter) font by The Inter Project Authors, under the SIL Open Font License 1.1 (`Snitchbot/Media/Fonts/Inter-OFL.txt`).
+- The window uses snitchbot.app's own look: charcoal, one gold accent, pill tabs and stat cards.
+- [Geist](https://github.com/vercel/geist-font) font by Vercel, under the SIL Open Font License 1.1 (`Snitchbot/Media/Fonts/Geist-OFL.txt`).

@@ -151,6 +151,39 @@ function ns.BossCount(run)
   return kills, pulls
 end
 
+local function dungeonOf(run) return (tostring(run.key or run.name or ""):match("^[^:]*")) end
+
+--- Folds runs of the same dungeon by the same character that are less than `gap`
+--- seconds apart into one: a wipe, a corpse run, or a step outside split them in
+--- 0.1.5 and 0.1.6. `list` is newest first. A run marked `closed` (the dungeon was
+--- reset) never takes the next one in. Returns how many were folded.
+function ns.MergeRuns(list, gap)
+  local folded, i = 0, 1
+  while i < #list do
+    local new, old = list[i], list[i + 1]
+    if not old.closed and old.ended and new.started and dungeonOf(new) == dungeonOf(old)
+      and new.character == old.character and new.started - old.ended <= gap then
+      old.ended = math.max(old.ended, new.ended or new.started)
+      for _, k in ipairs({ "kills", "xp", "deaths", "money" }) do old[k] = (old[k] or 0) + (new[k] or 0) end
+      old.mobs = old.mobs or {}
+      for mob, n in pairs(new.mobs or {}) do old.mobs[mob] = (old.mobs[mob] or 0) + n end
+      for _, k in ipairs({ "bosses", "loot" }) do
+        old[k] = old[k] or {}
+        for _, v in ipairs(new[k] or {}) do old[k][#old[k] + 1] = v end
+      end
+      old.group = old.group or {}
+      for name, class in pairs(new.group or {}) do old.group[name] = old.group[name] or class end
+      if not old.difficulty or old.difficulty == "" then old.difficulty = new.difficulty end
+      old.closed = new.closed
+      table.remove(list, i)
+      folded = folded + 1
+    else
+      i = i + 1
+    end
+  end
+  return folded
+end
+
 --- One line for chat when a run ends.
 function ns.RunSummary(run, now)
   local seconds = (run.ended or now) - run.started

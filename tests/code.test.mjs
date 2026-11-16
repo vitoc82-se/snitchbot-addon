@@ -200,7 +200,7 @@ test("rates, time to level and summaries", () => {
   assert.equal(out, "6,000|2h 00m|41m|35s|1,234,567|nil|The Deadmines: 41m, 55 kills, 9,800 XP, 14,341 XP/h, 1 death.");
 });
 
-test("a dungeon run starts on entering, counts kills and XP, and ends on leaving", () => {
+test("a dungeon run starts on entering, counts kills and XP, and ends 15 minutes after leaving", () => {
   const out = run(`
     CLOCK, INSIDE, LEVEL, XP = 1000, false, 20, 1000
     time = function() return CLOCK end
@@ -240,11 +240,14 @@ test("a dungeon run starts on entering, counts kills and XP, and ends on leaving
     CLOCK = CLOCK + 1800
     INSIDE = false
     e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    local still = tostring(SnitchbotDB.run ~= nil)
+    CLOCK = CLOCK + 901
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
     local r = SnitchbotDB.runs[1]
     local extra = table.concat({ #r.bosses, r.bosses[1].name, tostring(r.bosses[1].kill), r.bosses[1].seconds, #r.loot, r.loot[1].who, r.loot[1].q, r.money, r.group["Kesh"], CHAT[1] }, ";")
-    return table.concat({ tostring(logged), tostring(LOGGING), r.name, r.kills, r.xp, r.mobs["Defias Thug"], SnitchbotDB.session.kills, tostring(SnitchbotDB.run), SAID[#SAID - 1], SAID[#SAID], extra }, "|")
+    return table.concat({ tostring(logged), tostring(LOGGING), r.name, r.kills, r.xp, r.mobs["Defias Thug"], SnitchbotDB.session.kills, tostring(SnitchbotDB.run), SAID[#SAID - 1], SAID[#SAID], extra, still }, "|")
   `, { ui: true });
-  assert.match(out, /\|1;Rhahk'Zor;true;45;1;Kesh;3;44321;Rogue;PARTY:I'm using the snitchbot\.app addon to track this run\.$/);
+  assert.match(out, /\|1;Rhahk'Zor;true;45;1;Kesh;3;44321;Rogue;PARTY:I'm using the snitchbot\.app addon to track this run\.\|true$/);
   assert.match(out, /^true\|false\|The Deadmines\|1\|135\|1\|1\|nil\|/);
   assert.match(out, /The Deadmines: 40m, 1 kills, 1 boss, 135 XP, 203 XP\/h, \+4g 43s\.\|.*Combat log off\.\|/);
 });
@@ -294,46 +297,79 @@ test("loot: only 'receives loot' lines count, not Need, Greed or roll lines", ()
   assert.equal(out, "nil|nil|Nonut|6557|Bard's Boots of Spirit|2|1|false|true|Copper Bar|3|2|Bard's Boots of Spirit");
 });
 
-test("a run survives a death, a revive at the door and a difficulty flip; leaving alive ends it", () => {
+test("one run across a wipe, a corpse run and waiting at the door; split runs from before are joined", () => {
   const out = run(`
-    CLOCK, INSIDE, DEAD, DIFF = 1000, true, false, 0
+    CLOCK, INSIDE, DEAD, DIFF = 10000, true, false, 0
     time = function() return CLOCK end
     IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
-    GetInstanceInfo = function() return "The Deadmines", "party", DIFF, DIFF == 1 and "Normal" or "", 5, 0, false, 36 end
+    GetInstanceInfo = function() return "Deadmines", "party", DIFF, DIFF == 1 and "Normal" or "", 5, 0, false, 36 end
     UnitIsDeadOrGhost = function() return DEAD end
     LoggingCombat = function(on) if on ~= nil then LOGGING = on end return LOGGING end
     UnitName = function(u) if u == "party1" then return "Nonut" end if u == "player" then return "Vitoc War" end return nil end
     UnitClass = function() return "Rogue", "ROGUE" end
     IsInGroup = function() return true end
     IsInRaid = function() return false end
-    SnitchbotDB = { lists = {}, runs = { { name = "Old", started = 0, ended = 60, kills = 0, loot = {
-      { id = 1, name = "Loot", q = 2, who = "Lill" }, { id = 2, name = "Ogre Loincloth", q = 3, who = "Lill" } } } } }
+    local split = function(started, ended, key, kills) return { name = "Deadmines", key = key, character = "Vitoc War",
+      started = started, ended = ended, kills = kills, xp = kills * 10, deaths = 0, money = 100, mobs = { Rat = kills },
+      bosses = { { name = "Boss" .. kills } }, loot = { { id = 1, name = "Loot", q = 2, who = "Vitoc War" } }, group = { Nonut = "Rogue" } } end
+    -- 0.1.5 saved one visit as three runs (newest first), and an older, separate run.
+    SnitchbotDB = { lists = {}, runs = { split(5000, 5400, "36:0", 1), split(4900, 4950, "36:1", 2), split(2500, 4900, "36:0", 3), split(100, 1000, "36:0", 4) } }
     local e = SnitchbotEvents
     e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    local joined = #SnitchbotDB.runs .. ";" .. SnitchbotDB.runs[1].started .. "-" .. SnitchbotDB.runs[1].ended .. ";" .. SnitchbotDB.runs[1].kills .. ";" .. #SnitchbotDB.runs[1].bosses .. ";" .. #SnitchbotDB.runs[1].loot
+
     e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
     local started = SnitchbotDB.run.started
-    e.scripts.OnEvent(e, "CHAT_MSG_LOOT", "|HlootHistory:3|h[Loot]|h: Nonut has selected Need for: |cff1eff00|Hitem:6557::::|h[Bard's Boots of Spirit]|h|r", "Vitoc War")
     e.scripts.OnEvent(e, "CHAT_MSG_LOOT", "Nonut receives loot: |cff1eff00|Hitem:6557::::|h[Bard's Boots of Spirit]|h|r.", "Nonut Novemba")
-    CLOCK = CLOCK + 60
-    DEAD = true
+    -- Wipe, release, run back, revive at the door, wait for the group to leave combat.
+    CLOCK = CLOCK + 60; DEAD = true
     e.scripts.OnEvent(e, "PLAYER_DEAD")
     DIFF = 1
     e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
     INSIDE = false
     e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
-    CLOCK = CLOCK + 120
-    DEAD = false
+    CLOCK = CLOCK + 120; DEAD = false
     e.scripts.OnEvent(e, "PLAYER_ALIVE")
-    local afterRevive = tostring(SnitchbotDB.run ~= nil)
+    CLOCK = CLOCK + 400
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
+    local waiting = tostring(SnitchbotDB.run ~= nil)
+    -- In again to loot the last boss, then out for good.
     INSIDE = true
     e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
     local same = tostring(SnitchbotDB.run.started == started)
-    CLOCK = CLOCK + 300
-    INSIDE = false
+    CLOCK = CLOCK + 300; INSIDE = false
     e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = CLOCK + 901
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
     local r = SnitchbotDB.runs[1]
-    local old = SnitchbotDB.runs[2]
-    return table.concat({ afterRevive, same, tostring(SnitchbotDB.run), #SnitchbotDB.runs, r.deaths, #r.loot, r.loot[1].who, r.loot[1].name, r.ended - r.started, #old.loot, old.loot[1].name }, "|")
+    return table.concat({ joined, waiting, same, tostring(SnitchbotDB.run), #SnitchbotDB.runs, r.deaths, #r.loot, r.loot[1].who, r.ended - r.started }, "|")
   `, { ui: true });
-  assert.equal(out, "true|true|nil|2|1|1|Nonut|Bard's Boots of Spirit|480|1|Ogre Loincloth");
+  // 0.1.6+ runs: the visit is one run of 880s (in at 10000, out for good at 10880).
+  assert.equal(out, "2;2500-5400;6;3;0|true|true|nil|3|1|1|Nonut|880");
+});
+
+test("a dungeon reset makes the next visit a new run", () => {
+  const out = run(`
+    CLOCK, INSIDE = 1000, true
+    time = function() return CLOCK end
+    IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
+    GetInstanceInfo = function() return "Deadmines", "party", 1, "Normal", 5, 0, false, 36 end
+    UnitIsDeadOrGhost = function() return false end
+    LoggingCombat = function(on) if on ~= nil then LOGGING = on end return LOGGING end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = CLOCK + 600; INSIDE = false
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    e.scripts.OnEvent(e, "CHAT_MSG_SYSTEM", "Deadmines has been reset.")
+    local ended = tostring(SnitchbotDB.run)
+    CLOCK = CLOCK + 60; INSIDE = true
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = CLOCK + 600; INSIDE = false
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = CLOCK + 901
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
+    return ended .. "|" .. #SnitchbotDB.runs
+  `, { ui: true });
+  assert.equal(out, "nil|2");
 });

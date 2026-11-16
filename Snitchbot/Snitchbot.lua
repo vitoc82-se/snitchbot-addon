@@ -488,18 +488,24 @@ end
 
 -- ---- Runs
 
--- A run you left ends now; one left alone (logged out, gave up) ended when last seen.
-local function endRun(stale)
+-- How long you can be out of the dungeon (a wipe, a corpse run, a step outside)
+-- and still be on the same run when you come back in.
+local AWAY = 15 * 60
+
+-- The run ends when you were last inside it.
+local function endRun(closed)
   local d = db()
   local run = d.run
   if not run then return end
   d.run = nil
-  run.ended = stale and run.lastSeen or now()
-  run.lastSeen = nil
+  run.ended = run.leftAt or run.lastSeen or now()
+  run.lastSeen, run.leftAt, run.diedAt = nil, nil, nil
+  if closed then run.closed = true end
   local list = runs()
   table.insert(list, 1, run)
+  ns.MergeRuns(list, AWAY)
   while #list > 100 do table.remove(list) end
-  say(ns.RunSummary(run, now()))
+  say(ns.RunSummary(list[1], now()))
   stopCombatLog()
 end
 
@@ -530,25 +536,19 @@ local function announce()
   if channel then safe(SendChatMessage, ANNOUNCE, channel) end
 end
 
--- How long you can be outside after a death (released, revived at the door) before the run ends.
-local CORPSE_RUN = 15 * 60
-
 local function checkInstance(atLogin)
   local d = db()
   local inside = instance()
-  -- After a logout of more than 15 minutes, the run is over.
-  if atLogin and d.run and not ns.CanResume(d.run, now(), nil, 900) then endRun(true) end
   local run = d.run
   if run and inside and runKey(run) ~= inside.key then
     endRun() -- a different dungeon
   elseif run and not inside then
-    -- Leaving alive ends the run. After a death you release, run back, and may be
-    -- revived at the door outside: that's still the run, for a while.
-    local ghost = safe(UnitIsDeadOrGhost, "player")
-    if not ghost then
-      if not run.diedAt then endRun()
-      elseif now() - run.diedAt >= CORPSE_RUN then endRun(true) end -- ends when last seen inside
-    end
+    -- Out of the dungeon: a wipe, a corpse run, waiting at the door, or done.
+    -- Back in within 15 minutes is the same run; after that it's over.
+    run.leftAt = run.leftAt or (atLogin and run.lastSeen) or now()
+    if now() - run.leftAt > AWAY then endRun() end
+  elseif run and atLogin and not ns.CanResume(run, now(), nil, AWAY) then
+    endRun() -- logged out inside and came back much later
   end
   if not inside then return end
   if not d.run then
@@ -567,7 +567,7 @@ local function checkInstance(atLogin)
     end
   end
   d.run.lastSeen = now()
-  if not safe(UnitIsDeadOrGhost, "player") then d.run.diedAt = nil end
+  d.run.leftAt = nil
   d.run.key = inside.key
   d.run.difficulty = d.run.difficulty or inside.difficulty
   startCombatLog()
@@ -1244,7 +1244,7 @@ local function fillXP()
 
   local d = db()
   local run = d.run or runs()[1]
-  x.runLabel:SetText(d.run and "THIS RUN" or run and "LAST RUN" or "DUNGEON RUNS")
+  x.runLabel:SetText(d.run and (d.run.leftAt and "THIS RUN · OUTSIDE" or "THIS RUN") or run and "LAST RUN" or "DUNGEON RUNS")
   if run then
     x.runName:SetText(run.name)
     x.runLine:SetText(runLine(run, t))
@@ -1320,6 +1320,7 @@ events:SetScript("OnEvent", function(_, event, ...)
     xpNow = reading()
     session(true)
     cleanLoot()
+    ns.MergeRuns(runs(), AWAY)
     if C_Timer and C_Timer.NewTicker then
       -- Keeps the run's "last seen" fresh while you stand still.
       safe(C_Timer.NewTicker, 30, function()
@@ -1347,12 +1348,18 @@ events:SetScript("OnEvent", function(_, event, ...)
     onKill((...))
   elseif event == "PLAYER_DEAD" then
     local run = db().run
-    if run then run.deaths = (run.deaths or 0) + 1; run.diedAt = now() end
+    if run then run.deaths = (run.deaths or 0) + 1 end
   elseif event == "ENCOUNTER_START" or event == "ENCOUNTER_END" then
     onEncounter(event, ...)
   elseif event == "CHAT_MSG_LOOT" then
     local msg, who, _, _, who2 = ...
     onLoot(msg, (who and who ~= "") and who or who2)
+  elseif event == "CHAT_MSG_SYSTEM" then
+    local run, msg = db().run, tostring((...) or "")
+    local reset = ns.KillPattern(INSTANCE_RESET_SUCCESS or "%s has been reset.")
+    local name = msg:match(reset)
+    local same = name and run and (name == run.name or name:find(run.name, 1, true) or run.name:find(name, 1, true))
+    if run and run.leftAt and same then endRun(true) end
   elseif event == "PLAYER_MONEY" then
     onMoney()
   elseif event == "GROUP_ROSTER_UPDATE" then
@@ -1364,7 +1371,7 @@ end)
 for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "PLAYERBANKSLOTS_CHANGED", "GET_ITEM_INFO_RECEIVED",
   "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_UNGHOST", "PLAYER_ALIVE", "PLAYER_XP_UPDATE",
   "CHAT_MSG_COMBAT_XP_GAIN", "PLAYER_DEAD", "ENCOUNTER_START", "ENCOUNTER_END", "CHAT_MSG_LOOT", "PLAYER_MONEY",
-  "GROUP_ROSTER_UPDATE" }) do
+  "GROUP_ROSTER_UPDATE", "CHAT_MSG_SYSTEM" }) do
   pcall(events.RegisterEvent, events, e)
 end
 

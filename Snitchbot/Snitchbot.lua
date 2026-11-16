@@ -396,7 +396,9 @@ local KILL = ns.KillPattern(COMBATLOG_XPGAIN_FIRSTPERSON)
 local xpNow
 local now = function() return safe(time) or 0 end
 
-local DEFAULTS = { combatLog = true, openInDungeon = true, minimap = true, tab = "raid" }
+local DEFAULTS = { combatLog = true, openInDungeon = true, minimap = true, announce = true, tab = "raid" }
+local ANNOUNCE = "I'm using the snitchbot.app addon to track this run."
+local money = function() return tonumber(safe(GetMoney)) or 0 end
 
 local function settings()
   local d = db()
@@ -420,8 +422,9 @@ local function session(atLogin)
   local d = db()
   local key = me()
   if type(d.session) ~= "table" or (atLogin and not ns.CanResume(d.session, now(), key, 600)) then
-    d.session = { key = key, started = now(), xp = 0, kills = 0 }
+    d.session = { key = key, started = now(), xp = 0, kills = 0, moneyStart = money() }
   end
+  d.session.moneyStart = d.session.moneyStart or money()
   d.session.lastSeen = now()
   return d.session
 end
@@ -490,6 +493,33 @@ local function endRun(stale)
   stopCombatLog()
 end
 
+-- Who's in the group, with their class: attendance, later.
+local function noteGroup(run)
+  if not run then return end
+  run.group = run.group or {}
+  local raid = safe(IsInRaid)
+  local n = raid and (tonumber(safe(GetNumGroupMembers)) or 0) or 4
+  for i = 1, n do
+    local unit = raid and ("raid" .. i) or ("party" .. i)
+    local name = safe(UnitName, unit)
+    if name and name ~= "" and name ~= UNKNOWNOBJECT and name ~= me() then
+      local class = safe(UnitClass, unit)
+      run.group[ns.ShortName(name)] = class or "?"
+    end
+  end
+end
+
+-- One line in group chat when a run starts. Solo, nothing is said.
+local function announce()
+  if not settings().announce or not SendChatMessage then return end
+  local channel
+  -- Dungeon finder groups talk in instance chat; skip that check if the client has no such group kind.
+  if LE_PARTY_CATEGORY_INSTANCE and safe(IsInGroup, LE_PARTY_CATEGORY_INSTANCE) then channel = "INSTANCE_CHAT"
+  elseif safe(IsInRaid) then channel = "RAID"
+  elseif safe(IsInGroup) then channel = "PARTY" end
+  if channel then safe(SendChatMessage, ANNOUNCE, channel) end
+end
+
 local function checkInstance(atLogin)
   local d = db()
   local inside = instance()
@@ -503,8 +533,12 @@ local function checkInstance(atLogin)
     d.run = {
       key = inside.key, name = inside.name, kind = inside.kind, difficulty = inside.difficulty,
       character = me(), level = reading().level, started = now(), kills = 0, xp = 0, deaths = 0, mobs = {},
+      bosses = {}, loot = {}, group = {}, moneyStart = money(), money = 0,
     }
-    say(string.format("Tracking %s: kills, XP and time.", inside.name))
+    noteGroup(d.run)
+    say(string.format("Tracking %s: kills, XP, bosses, loot and gold.", inside.name))
+    -- A moment later, so the chat channels are ready after the loading screen.
+    if C_Timer and C_Timer.After then C_Timer.After(3, announce) else announce() end
     if settings().openInDungeon and frame then
       frame:Show()
       selectTab("xp")
@@ -537,6 +571,43 @@ local function onKill(msg)
     run.lastSeen = now()
   end
   update()
+end
+
+local function onEncounter(event, id, name, _, _, success)
+  local run = db().run
+  if not run then return end
+  run.bosses = run.bosses or {}
+  if event == "ENCOUNTER_START" then
+    run.pull = { id = id, name = name, started = now() }
+  else
+    local pull = run.pull and run.pull.id == id and run.pull or { id = id, name = name, started = now() }
+    run.pull = nil
+    run.bosses[#run.bosses + 1] = { id = id, name = name or pull.name, seconds = now() - pull.started, kill = success == 1 or success == true }
+  end
+  run.lastSeen = now()
+  update()
+end
+
+local function onLoot(msg, who)
+  local run = db().run
+  if not run then return end
+  local id, name, quality, n = ns.ParseLoot(msg)
+  if not id or (quality and quality < 2) then return end
+  if not quality then
+    quality = select(3, safe(C_Item and C_Item.GetItemInfo or GetItemInfo, id))
+    if quality and quality < 2 then return end
+  end
+  who = ns.ShortName(who)
+  run.loot = run.loot or {}
+  if #run.loot < 60 then
+    run.loot[#run.loot + 1] = { id = id, name = name, q = quality or 2, n = n, who = who ~= "" and who or me() }
+  end
+  update()
+end
+
+local function onMoney()
+  local run, m = db().run, money()
+  if run and run.moneyStart then run.money = m - run.moneyStart end
 end
 
 -- ---- Probe
@@ -717,22 +788,23 @@ local function makeXPPane(p)
   x.rate = stat(p, -88, "XP per hour")
   x.ttl = stat(p, -110, "To next level")
   x.kills = stat(p, -132, "Kills")
-  x.time = stat(p, -154, "Session")
+  x.gold = stat(p, -154, "Gold")
+  x.time = stat(p, -176, "Session")
   local reset = smallButton(p, "Reset session", 104)
-  reset:SetPoint("TOPRIGHT", -PAD, -178)
+  reset:SetPoint("TOPRIGHT", -PAD, -200)
   reset:SetScript("OnClick", function() resetSession(); update() end)
-  divider(p, -212)
+  divider(p, -232)
 
   x.runLabel = text(p, 11, "semibold", C.muted)
-  x.runLabel:SetPoint("TOPLEFT", PAD, -226)
+  x.runLabel:SetPoint("TOPLEFT", PAD, -246)
   x.runName = text(p, 14, "semibold", C.text)
-  x.runName:SetPoint("TOPLEFT", PAD, -244)
+  x.runName:SetPoint("TOPLEFT", PAD, -264)
   x.runName:SetPoint("RIGHT", -PAD, 0)
   x.runLine = text(p, 12, "regular", C.dim)
-  x.runLine:SetPoint("TOPLEFT", PAD, -264)
+  x.runLine:SetPoint("TOPLEFT", PAD, -284)
   x.runLine:SetPoint("RIGHT", -PAD, 0)
   local all = smallButton(p, "All runs", 84)
-  all:SetPoint("TOPLEFT", PAD, -290)
+  all:SetPoint("TOPLEFT", PAD, -310)
   all:SetScript("OnClick", function() selectTab("runs") end)
 
   -- Footer: is the combat log on? Click to switch it for dungeons.
@@ -756,10 +828,61 @@ local function makeXPPane(p)
   log:SetScript("OnClick", function() setCombatLog(not settings().combatLog); update() end)
 end
 
-local RUN_HEIGHT = 46
+local RUN_HEIGHT = 62
+local QUALITY_HEX = { [2] = "|cff1eff00", [3] = "|cff0070dd", [4] = "|cffa335ee", [5] = "|cffff8000" }
+
+-- Everything about a run, on hover: bosses, loot, group.
+local function runTooltip(row)
+  local run = row.run
+  if not run or not GameTooltip then return end
+  GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+  GameTooltip:SetText(run.name or "Dungeon")
+  if run.difficulty then GameTooltip:AddLine(run.difficulty, C.muted[1], C.muted[2], C.muted[3]) end
+  if run.bosses and #run.bosses > 0 then
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Bosses", C.accent[1], C.accent[2], C.accent[3])
+    for _, b in ipairs(run.bosses) do
+      local c = b.kill and C.success or C.danger
+      GameTooltip:AddDoubleLine((b.name or "Boss") .. (b.kill and "" or " (wipe)"), ns.Duration(b.seconds or 0), c[1], c[2], c[3], C.dim[1], C.dim[2], C.dim[3])
+    end
+  end
+  if run.loot and #run.loot > 0 then
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Loot", C.accent[1], C.accent[2], C.accent[3])
+    for _, l in ipairs(run.loot) do
+      GameTooltip:AddDoubleLine((QUALITY_HEX[l.q] or "") .. l.name .. "|r" .. ((l.n or 1) > 1 and (" x" .. l.n) or ""), l.who or "", 1, 1, 1, C.dim[1], C.dim[2], C.dim[3])
+    end
+  end
+  local names = {}
+  for name, class in pairs(run.group or {}) do names[#names + 1] = name .. " (" .. class .. ")" end
+  if #names > 0 then
+    table.sort(names)
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Group", C.accent[1], C.accent[2], C.accent[3])
+    GameTooltip:AddLine(table.concat(names, ", "), C.dim[1], C.dim[2], C.dim[3], true)
+  end
+  GameTooltip:Show()
+end
+
+-- "2 of 3 bosses · 4 items · 4 in group"
+local function runDetails(run)
+  local parts = {}
+  local kills, pulls = ns.BossCount(run)
+  if pulls > 0 then parts[#parts + 1] = kills .. (kills == 1 and " boss" or " bosses") .. ((pulls > kills) and (", " .. (pulls - kills) .. " wipes") or "") end
+  if run.loot and #run.loot > 0 then parts[#parts + 1] = #run.loot .. (#run.loot == 1 and " item" or " items") end
+  local n = 0
+  for _ in pairs(run.group or {}) do n = n + 1 end
+  if n > 0 then parts[#parts + 1] = "with " .. n .. (n == 1 and " other" or " others") end
+  return #parts > 0 and table.concat(parts, "  ·  ") or "No bosses or loot yet"
+end
 
 local function makeRunRow(parent, i)
-  local r = CreateFrame("Frame", nil, parent)
+  local r = CreateFrame("Button", nil, parent)
+  r.hover = fill(r, C.hover)
+  r.hover:SetAllPoints()
+  r.hover:Hide()
+  r:SetScript("OnEnter", function(self) self.hover:Show(); runTooltip(self) end)
+  r:SetScript("OnLeave", function(self) self.hover:Hide(); if GameTooltip then GameTooltip:Hide() end end)
   r:SetHeight(RUN_HEIGHT)
   r:SetPoint("TOPLEFT", 0, -(i - 1) * RUN_HEIGHT)
   r:SetPoint("RIGHT", parent, "RIGHT")
@@ -776,6 +899,9 @@ local function makeRunRow(parent, i)
   r.line = text(r, 12, "regular", C.dim)
   r.line:SetPoint("TOPLEFT", 10, -25)
   r.line:SetPoint("RIGHT", -4, 0)
+  r.details = text(r, 11, "regular", C.muted)
+  r.details:SetPoint("TOPLEFT", 10, -42)
+  r.details:SetPoint("RIGHT", -4, 0)
   local rule = fill(r, C.line, "ARTWORK")
   rule:SetHeight(1)
   rule:SetPoint("BOTTOMLEFT")
@@ -801,7 +927,7 @@ local function makeRunsPane(p)
   r.empty:SetPoint("TOPLEFT", PAD, -76)
   r.empty:SetPoint("RIGHT", -PAD, 0)
   safe(r.empty.SetWordWrap, r.empty, true)
-  r.empty:SetText("No runs yet.\n\nEnter a dungeon and Snitchbot starts tracking by itself: time, kills, XP and deaths.")
+  r.empty:SetText("No runs yet.\n\nEnter a dungeon and Snitchbot starts tracking by itself: time, kills, XP, bosses, loot, gold and deaths. Hover a run to see it all.")
 end
 
 local function makeSettingsPane(p)
@@ -813,18 +939,20 @@ local function makeSettingsPane(p)
     function() return s().combatLog end, setCombatLog)
   toggle(p, -86, "Open in dungeons", "Opens this window on the XP tab when a run starts.",
     function() return s().openInDungeon end, function(on) s().openInDungeon = on end)
-  toggle(p, -130, "Minimap button", "Click it to open or close Snitchbot. Drag it to move it.",
+  toggle(p, -130, "Tell my group", "Says \"" .. ANNOUNCE .. "\" in group chat when a run starts.",
+    function() return s().announce end, function(on) s().announce = on end)
+  toggle(p, -174, "Minimap button", "Click it to open or close Snitchbot. Drag it to move it.",
     function() return s().minimap end, function(on) s().minimap = on; if frame.minimap then show(frame.minimap, on) end end)
-  divider(p, -180)
+  divider(p, -224)
 
   local pasteB = button(p, "Paste a raid list", true, 150)
-  pasteB:SetPoint("TOPLEFT", PAD, -196)
+  pasteB:SetPoint("TOPLEFT", PAD, -240)
   pasteB:SetScript("OnClick", openPaste)
   local probeB = button(p, "Probe the game", false, 140)
   probeB:SetPoint("LEFT", pasteB, "RIGHT", 10, 0)
   probeB:SetScript("OnClick", probe)
   local probeHint = text(p, 11, "regular", C.muted)
-  probeHint:SetPoint("TOPLEFT", PAD, -232)
+  probeHint:SetPoint("TOPLEFT", PAD, -276)
   probeHint:SetPoint("RIGHT", -PAD, 0)
   safe(probeHint.SetWordWrap, probeHint, true)
   probeHint:SetText("Probe makes a line that says which game functions this client has. Send it to Snitchbot when asked.")
@@ -1048,6 +1176,9 @@ local function fillXP()
   x.ttl:SetText(maxLevel and "–" or (left and ns.Duration(left) or "–"))
   x.kills:SetText(ns.Num(s.kills))
   x.time:SetText(ns.Duration(seconds))
+  local earned = money() - (s.moneyStart or money())
+  local goldRate = seconds >= 60 and earned ~= 0 and (earned * 3600 / seconds) or nil
+  x.gold:SetText((earned > 0 and "+" or "") .. ns.Money(earned) .. (goldRate and ("  ·  " .. ns.Money(goldRate) .. "/h") or ""))
 
   local d = db()
   local run = d.run or runs()[1]
@@ -1093,6 +1224,8 @@ local function fillRuns()
     row.name:SetText(run.name or "Dungeon")
     row.when:SetText(live and (hex(C.accent) .. "NOW|r") or (safe(date, "%b %d, %H:%M", run.started) or ""))
     row.line:SetText(runLine(run, t))
+    row.details:SetText(runDetails(run))
+    row.run = run
     show(row.mark, live)
     row:Show()
   end
@@ -1151,13 +1284,23 @@ events:SetScript("OnEvent", function(_, event, ...)
   elseif event == "PLAYER_DEAD" then
     local run = db().run
     if run then run.deaths = (run.deaths or 0) + 1 end
+  elseif event == "ENCOUNTER_START" or event == "ENCOUNTER_END" then
+    onEncounter(event, ...)
+  elseif event == "CHAT_MSG_LOOT" then
+    local msg, who, _, _, who2 = ...
+    onLoot(msg, (who and who ~= "") and who or who2)
+  elseif event == "PLAYER_MONEY" then
+    onMoney()
+  elseif event == "GROUP_ROSTER_UPDATE" then
+    noteGroup(db().run)
   else
     soon()
   end
 end)
 for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "PLAYERBANKSLOTS_CHANGED", "GET_ITEM_INFO_RECEIVED",
   "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_UNGHOST", "PLAYER_ALIVE", "PLAYER_XP_UPDATE",
-  "CHAT_MSG_COMBAT_XP_GAIN", "PLAYER_DEAD" }) do
+  "CHAT_MSG_COMBAT_XP_GAIN", "PLAYER_DEAD", "ENCOUNTER_START", "ENCOUNTER_END", "CHAT_MSG_LOOT", "PLAYER_MONEY",
+  "GROUP_ROSTER_UPDATE" }) do
   pcall(events.RegisterEvent, events, e)
 end
 

@@ -211,6 +211,14 @@ test("a dungeon run starts on entering, counts kills and XP, and ends on leaving
     UnitXPMax = function() return 5000 end
     UnitIsDeadOrGhost = function() return false end
     LOGGING = false
+    MONEY = 10000
+    GetMoney = function() return MONEY end
+    IsInGroup = function() return true end
+    IsInRaid = function() return false end
+    UnitName = function(u) if u == "party1" then return "Kesh-Realm" end if u == "player" then return "Vitoc War" end return nil end
+    UnitClass = function(u) return "Rogue", "ROGUE" end
+    CHAT = {}
+    SendChatMessage = function(msg, channel) CHAT[#CHAT + 1] = channel .. ":" .. msg end
     LoggingCombat = function(on) if on ~= nil then LOGGING = on end return LOGGING end
     local e = SnitchbotEvents
     e.scripts.OnEvent(e, "PLAYER_LOGIN")
@@ -220,15 +228,25 @@ test("a dungeon run starts on entering, counts kills and XP, and ends on leaving
     CLOCK = CLOCK + 600
     XP = 1135
     e.scripts.OnEvent(e, "CHAT_MSG_COMBAT_XP_GAIN", "Defias Thug dies, you gain 135 experience.")
+    e.scripts.OnEvent(e, "ENCOUNTER_START", 1, "Rhahk'Zor", 1, 5)
+    CLOCK = CLOCK + 45
+    e.scripts.OnEvent(e, "ENCOUNTER_END", 1, "Rhahk'Zor", 1, 5, 1)
+    e.scripts.OnEvent(e, "CHAT_MSG_LOOT", "Kesh receives loot: |cff0070dd|Hitem:5187::::::::17:::::|h[Rhahk'Zor's Hammer]|h|r.", "Kesh-Realm")
+    e.scripts.OnEvent(e, "CHAT_MSG_LOOT", "You receive loot: |cff9d9d9d|Hitem:2140::::::::17:::::|h[Carving Knife]|h|r.", "Vitoc War")
+    MONEY = 54321
+    e.scripts.OnEvent(e, "PLAYER_MONEY")
+    CLOCK = CLOCK - 45
     e.scripts.OnEvent(e, "PLAYER_XP_UPDATE", "player")
     CLOCK = CLOCK + 1800
     INSIDE = false
     e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
     local r = SnitchbotDB.runs[1]
-    return table.concat({ tostring(logged), tostring(LOGGING), r.name, r.kills, r.xp, r.mobs["Defias Thug"], SnitchbotDB.session.kills, tostring(SnitchbotDB.run), SAID[#SAID - 1], SAID[#SAID] }, "|")
+    local extra = table.concat({ #r.bosses, r.bosses[1].name, tostring(r.bosses[1].kill), r.bosses[1].seconds, #r.loot, r.loot[1].who, r.loot[1].q, r.money, r.group["Kesh"], CHAT[1] }, ";")
+    return table.concat({ tostring(logged), tostring(LOGGING), r.name, r.kills, r.xp, r.mobs["Defias Thug"], SnitchbotDB.session.kills, tostring(SnitchbotDB.run), SAID[#SAID - 1], SAID[#SAID], extra }, "|")
   `, { ui: true });
+  assert.match(out, /\|1;Rhahk'Zor;true;45;1;Kesh;3;44321;Rogue;PARTY:I'm using the snitchbot\.app addon to track this run\.$/);
   assert.match(out, /^true\|false\|The Deadmines\|1\|135\|1\|1\|nil\|/);
-  assert.match(out, /The Deadmines: 40m, 1 kills, 135 XP, 203 XP\/h\.\|.*Combat log off\.$/);
+  assert.match(out, /The Deadmines: 40m, 1 kills, 1 boss, 135 XP, 203 XP\/h, \+4g 43s\.\|.*Combat log off\.\|/);
 });
 
 test("one window: remembers it was open, switches tabs, and × keeps it shut", () => {
@@ -246,4 +264,17 @@ test("one window: remembers it was open, switches tabs, and × keeps it shut", (
     return table.concat({ openAtLogin, level, pct, runsTitle, empty, tostring(f.shown), tostring(SnitchbotDB.settings.open), SnitchbotDB.settings.tab }, "|")
   `, { ui: true });
   assert.equal(out, "true|Level 23|25.0%|Dungeon runs|true|false|false|runs");
+});
+
+test("loot lines, money and bosses", () => {
+  const out = run(`
+    local a = { ns.ParseLoot("You receive loot: |cff0070dd|Hitem:10399::::::::20:::::|h[Blackened Defias Armor]|h|r.") }
+    local b = { ns.ParseLoot("Kesh receives loot: |cff1eff00|Hitem:2840::::::::20:::::|h[Copper Bar]|h|rx3.") }
+    local c = ns.ParseLoot("You receive currency: 5 Badges.")
+    local run = { name = "The Deadmines", started = 0, ended = 2460, kills = 55, xp = 9800, money = 123456,
+      bosses = { { name = "Rhahk'Zor", kill = true }, { name = "Sneed", kill = false }, { name = "Sneed", kill = true } } }
+    return table.concat({ a[1], a[2], a[3], a[4], b[1], b[3], b[4], tostring(c),
+      ns.Money(123456), ns.Money(4005), ns.Money(-1210), ns.Money(7), ns.RunSummary(run, 0) }, "|")
+  `);
+  assert.equal(out, "10399|Blackened Defias Armor|3|1|2840|2|3|nil|12g 34s|40s 5c|-12s 10c|7c|The Deadmines: 41m, 55 kills, 2 bosses, 9,800 XP, 14,341 XP/h, +12g 34s.");
 });

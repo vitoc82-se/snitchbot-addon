@@ -6,7 +6,7 @@ One window with four tabs. Open it with the minimap button (or `/sb`); it stays 
 
 - **Raid list**: what to bring for raid night, how many you have in bags and bank, what's missing. **New list** pastes the code from **Raid list** on [auction.snitchbot.app](https://auction.snitchbot.app) (**Copy for the addon**).
 - **XP**: XP per hour, time to next level, kills, and the current dungeon run.
-- **Runs**: every dungeon run: time, kills, XP, XP per hour and deaths. Runs start and end by themselves.
+- **Runs**: every dungeon run: time, kills, XP per hour, bosses (kills and wipes), loot, gold and who you ran with. Hover a run for the details. Runs start and end by themselves, and Snitchbot says in group chat that it's tracking the run (Settings → Tell my group).
 - **Settings**: start the combat log in dungeons, open on entering a dungeon, the minimap button, and **Probe the game**.
 
 ## Development

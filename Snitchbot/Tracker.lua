@@ -73,15 +73,54 @@ function ns.CanResume(saved, now, key, maxGap)
   return now - saved.lastSeen <= (maxGap or 600)
 end
 
+--- Copper -> "12g 40s", "40s 5c", "-3g 10s".
+function ns.Money(copper)
+  copper = math.floor(copper or 0)
+  local sign = copper < 0 and "-" or ""
+  copper = math.abs(copper)
+  local g, s, c = math.floor(copper / 10000), math.floor(copper % 10000 / 100), copper % 100
+  if g > 0 then return string.format("%s%sg %ds", sign, ns.Num(g), s) end
+  if s > 0 then return string.format("%s%ds %dc", sign, s, c) end
+  return string.format("%s%dc", sign, c)
+end
+
+-- Item link colours to item quality: green 2, blue 3, purple 4, orange 5.
+local QUALITY = { ["1eff00"] = 2, ["0070dd"] = 3, ["a335ee"] = 4, ["ff8000"] = 5, ["9d9d9d"] = 0, ["ffffff"] = 1 }
+
+--- A loot chat line -> item id, name, quality (nil if unknown), count. Nil when there's no item link.
+function ns.ParseLoot(msg)
+  msg = tostring(msg or "")
+  local id = tonumber(msg:match("|Hitem:(%d+)"))
+  if not id then return nil end
+  local name = msg:match("|h%[(.-)%]|h") or ("Item " .. id)
+  local colour = msg:match("|c%x%x(%x%x%x%x%x%x)|Hitem:")
+  local quality = colour and QUALITY[colour:lower()]
+  local count = tonumber(msg:match("|h|rx(%d+)") or msg:match("%]|h|r%s*x(%d+)")) or 1
+  return id, name, quality, count
+end
+
+--- Boss kills in a run, and pulls.
+function ns.BossCount(run)
+  local kills, pulls = 0, 0
+  for _, b in ipairs(run.bosses or {}) do
+    pulls = pulls + 1
+    if b.kill then kills = kills + 1 end
+  end
+  return kills, pulls
+end
+
 --- One line for chat when a run ends.
 function ns.RunSummary(run, now)
   local seconds = (run.ended or now) - run.started
   local parts = { ns.Duration(seconds), ns.Num(run.kills) .. " kills" }
+  local bosses = ns.BossCount(run)
+  if bosses > 0 then parts[#parts + 1] = bosses .. (bosses == 1 and " boss" or " bosses") end
   if (run.xp or 0) > 0 then
     parts[#parts + 1] = ns.Num(run.xp) .. " XP"
     local rate = ns.Rate(run.xp, seconds)
     if rate then parts[#parts + 1] = ns.Num(rate) .. " XP/h" end
   end
+  if (run.money or 0) ~= 0 then parts[#parts + 1] = (run.money > 0 and "+" or "") .. ns.Money(run.money) end
   if (run.deaths or 0) > 0 then parts[#parts + 1] = run.deaths .. (run.deaths == 1 and " death" or " deaths") end
   return string.format("%s: %s.", run.name or "Dungeon", table.concat(parts, ", "))
 end

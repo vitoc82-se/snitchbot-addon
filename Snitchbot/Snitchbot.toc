@@ -5,6 +5,7 @@
 ## Version: @project-version@
 ## SavedVariables: SnitchbotDB
 ## X-Website: https://forever.snitchbot.app
+## X-Curse-Project-ID: 1806816
 
 Code.lua
 Snitchbot.lua

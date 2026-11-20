@@ -547,7 +547,9 @@ end
 
 -- ---- The combat log: on in dungeons, so we can learn what WoW Forever writes.
 
-local function combatLogging() return safe(LoggingCombat) and true or false end
+-- WoW Forever always answers "off" when asked (seen 2026-11-20), even while the log
+-- is being written. So Snitchbot goes by what it did itself: on once per run, off after.
+local function combatLogging() return db().startedLog or (safe(LoggingCombat) and true or false) end
 
 local function startCombatLog()
   if not settings().combatLog then return end
@@ -557,20 +559,15 @@ local function startCombatLog()
   if C_CVar and C_CVar.SetCVar then safe(C_CVar.SetCVar, "advancedCombatLogging", "1") else safe(SetCVar, "advancedCombatLogging", "1") end
   safe(LoggingCombat, true)
   db().startedLog = true
-  local run = db().run
-  if combatLogging() then
-    say("Combat log on for this dungeon. It's saved in the game's Logs folder.")
-  elseif run and not run.logFailed then
-    run.logFailed = true -- said once; the 30-second check keeps trying
-    say("Couldn't start the combat log yet. Snitchbot keeps trying, or type /combatlog.")
-  end
+  say("Combat log on for this dungeon. It's saved in the game's Logs folder.")
 end
 
 local function stopCombatLog()
   local d = db()
   if not d.startedLog then return end
   d.startedLog = nil
-  if combatLogging() then safe(LoggingCombat, false); say("Combat log off.") end
+  safe(LoggingCombat, false)
+  say("Combat log off.")
 end
 
 local function setCombatLog(on)
@@ -591,7 +588,7 @@ local function endRun(closed)
   if not run then return end
   d.run = nil
   run.ended = run.leftAt or run.lastSeen or now()
-  run.lastSeen, run.leftAt, run.diedAt = nil, nil, nil
+  run.lastSeen, run.leftAt, run.diedAt, run.outAt, run.backAt, run.groupOut = nil, nil, nil, nil, nil, nil
   if closed then run.closed = true end
   local list = runs()
   table.insert(list, 1, run)
@@ -664,6 +661,10 @@ local function checkInstance(atLogin)
   elseif run and not inside then
     -- Out of the dungeon: a wipe, a corpse run, waiting at the door, or done.
     -- Back in within 15 minutes is the same run; after that it's over.
+    if not run.leftAt then -- the group as you left: a new one you join outside isn't this run's
+      run.groupOut = {}
+      for name, class in pairs(run.group or {}) do run.groupOut[name] = class end
+    end
     run.leftAt = run.leftAt or (atLogin and run.lastSeen) or now()
     if now() - run.leftAt > AWAY then endRun() end
   elseif run and atLogin and not ns.CanResume(run, now(), nil, AWAY) then
@@ -687,6 +688,7 @@ local function checkInstance(atLogin)
       selectTab("xp")
     end
   end
+  if d.run.leftAt then d.run.outAt, d.run.backAt = d.run.leftAt, now() end -- back in: same run, unless it's another copy
   d.run.lastSeen = now()
   d.run.leftAt = nil
   d.run.key = inside.key
@@ -704,10 +706,7 @@ local function onXP()
   update()
 end
 
-local function onKill(msg)
-  local name, xp = ns.ParseKill(msg, KILL)
-  if not name then return end
-  tally("xpBy", "kills", (xp or 0) + ns.XPBonus(msg))
+local function countKill(name)
   local s = session()
   s.kills = s.kills + 1
   local run = db().run
@@ -716,6 +715,53 @@ local function onKill(msg)
     run.mobs = run.mobs or {}
     run.mobs[name] = (run.mobs[name] or 0) + 1
     run.lastSeen = now()
+  end
+  update()
+end
+
+local function onKill(msg)
+  local name, xp = ns.ParseKill(msg, KILL)
+  if not name then return end
+  tally("xpBy", "kills", (xp or 0) + ns.XPBonus(msg))
+  countKill(name)
+end
+
+-- At max level there are no XP lines, so a kill is an enemy you see die: your
+-- target or a nameplate. Each one counts once; one someone else tagged doesn't.
+local seenDead, seenCount = {}, 0
+local function onUnitDeath(unit)
+  if type(unit) ~= "string" then return end
+  local cap = tonumber(safe(GetMaxPlayerLevel)) or tonumber(MAX_PLAYER_LEVEL) or 60
+  if (tonumber(safe(UnitLevel, "player")) or 0) < cap or not safe(UnitIsDead, unit) then return end
+  if safe(UnitIsPlayer, unit) or safe(UnitIsTapDenied, unit) then return end
+  local reaction = tonumber(safe(UnitReaction, unit, "player"))
+  if reaction and reaction > 4 then return end -- friendly
+  local guid = safe(UnitGUID, unit)
+  if not ns.InstanceCopy(guid) or seenDead[guid] then return end
+  if seenCount >= 2000 then seenDead, seenCount = {}, 0 end
+  seenDead[guid], seenCount = true, seenCount + 1
+  countKill(safe(UnitName, unit) or "?")
+end
+
+-- Which copy of the dungeon you're in, from the creatures around you. Back inside
+-- within 15 minutes is the same run, unless it's another copy: someone reset it,
+-- or you joined a new group. Then the old run ends when you left it.
+local function noteCopy(unit)
+  local run = db().run
+  if not run or run.leftAt then return end
+  local map, copy = ns.InstanceCopy(safe(UnitGUID, unit))
+  if not copy or map ~= runKey(run) then return end
+  if not run.copy then run.copy = copy; return end
+  if run.copy == copy then return end
+  local back = run.backAt
+  run.leftAt = run.outAt or now()
+  run.group = run.groupOut or run.group
+  endRun(true)
+  checkInstance(false)
+  local new = db().run
+  if new then
+    new.copy = copy
+    new.started = back or new.started
   end
   update()
 end
@@ -1788,6 +1834,7 @@ events:SetScript("OnEvent", function(_, event, ...)
     end
   elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_UNGHOST" or event == "PLAYER_ALIVE" then
     local isLogin, isReload = ...
+    if event == "PLAYER_ENTERING_WORLD" and isLogin then db().startedLog = nil end -- logging out turns the log off
     checkInstance(event == "PLAYER_ENTERING_WORLD" and (isLogin or isReload))
     update()
   elseif event == "PLAYER_XP_UPDATE" then
@@ -1798,7 +1845,14 @@ events:SetScript("OnEvent", function(_, event, ...)
     local run = db().run
     if run then run.deaths = (run.deaths or 0) + 1 end
   elseif event == "ENCOUNTER_START" or event == "ENCOUNTER_END" then
+    if event == "ENCOUNTER_START" then noteCopy("boss1") end
     onEncounter(event, ...)
+  elseif event == "UNIT_HEALTH" or event == "NAME_PLATE_UNIT_REMOVED" then
+    onUnitDeath((...))
+  elseif event == "NAME_PLATE_UNIT_ADDED" then
+    noteCopy((...))
+  elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" then
+    noteCopy(event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover")
   elseif event == "CHAT_MSG_LOOT" then
     local msg, who, _, _, who2 = ...
     onLoot(msg, (who and who ~= "") and who or who2)
@@ -1841,7 +1895,8 @@ for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "
   "GROUP_ROSTER_UPDATE", "CHAT_MSG_SYSTEM", "PLAYER_LEVEL_UP", "QUEST_TURNED_IN", "CHAT_MSG_COMBAT_FACTION_CHANGE",
   "MERCHANT_SHOW", "MERCHANT_CLOSED", "MAIL_SHOW", "MAIL_CLOSED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
   "TRAINER_SHOW", "TRAINER_CLOSED", "TAXIMAP_OPENED", "TAXIMAP_CLOSED", "TRADE_SHOW", "TRADE_CLOSED",
-  "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_LOGOUT" }) do
+  "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_LOGOUT",
+  "UNIT_HEALTH", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT" }) do
   pcall(events.RegisterEvent, events, e)
 end
 

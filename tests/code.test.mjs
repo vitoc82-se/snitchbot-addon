@@ -375,6 +375,118 @@ test("a dungeon reset makes the next visit a new run", () => {
   assert.equal(out, "nil|2");
 });
 
+test("another copy of the same dungeon is a new run, even back within 15 minutes", () => {
+  const out = run(`
+    CLOCK, INSIDE, COPY, MATE = 1000, true, "37452", "Lana"
+    time = function() return CLOCK end
+    IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
+    GetInstanceInfo = function() return "Blackrock Depths", "party", 1, "Normal", 5, 0, false, 230 end
+    UnitIsDeadOrGhost = function() return false end
+    LoggingCombat = function() end
+    UnitGUID = function(u) if u == "player" then return "Player-6949-001EE7C2" end return "Creature-0-6947-230-" .. COPY .. "-8983-0000123456" end
+    UnitName = function(u) if u == "party1" then return MATE end if u == "player" then return "Vitoc" end return "Dark Iron Watchman" end
+    UnitClass = function() return "Priest", "PRIEST" end
+    IsInGroup = function() return true end
+    IsInRaid = function() return false end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    e.scripts.OnEvent(e, "NAME_PLATE_UNIT_ADDED", "nameplate1")
+    -- A wipe: out and back in the same copy is still the same run.
+    CLOCK = CLOCK + 600; INSIDE = false
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = CLOCK + 120; INSIDE = true
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    e.scripts.OnEvent(e, "PLAYER_TARGET_CHANGED")
+    local same = tostring(SnitchbotDB.run.started == 1000)
+    -- Out at 2000, a new group, back at 2600 in another copy.
+    CLOCK = 2000; INSIDE = false
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = 2600; INSIDE = true; MATE = "Severus"
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    e.scripts.OnEvent(e, "GROUP_ROSTER_UPDATE")
+    CLOCK = 2605; COPY = "38151"
+    e.scripts.OnEvent(e, "NAME_PLATE_UNIT_ADDED", "nameplate2")
+    local cur, old = SnitchbotDB.run, SnitchbotDB.runs[1]
+    -- A /reload later joins runs again: but not these two.
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    return table.concat({ same, #SnitchbotDB.runs, old.started, old.ended, old.copy, tostring(old.group.Severus), cur.started, cur.copy, tostring(cur.group.Lana) }, "|")
+  `, { ui: true });
+  assert.equal(out, "true|1|1000|2000|37452|nil|2600|38151|nil");
+});
+
+test("at max level a kill is an enemy you see die, once each", () => {
+  const out = run(`
+    CLOCK, LEVEL = 1000, 60
+    time = function() return CLOCK end
+    IsInInstance = function() return true, "party" end
+    GetInstanceInfo = function() return "Scholomance", "party", 1, "Normal", 5, 0, false, 289 end
+    UnitIsDeadOrGhost = function() return false end
+    LoggingCombat = function() end
+    GetMaxPlayerLevel = function() return 60 end
+    UNITS = {
+      nameplate1 = { guid = "Creature-0-6947-289-40001-10475-01", name = "Scholomance Student", dead = true, reaction = 2 },
+      nameplate2 = { guid = "Creature-0-6947-289-40001-10476-02", name = "Scholomance Acolyte", dead = false, reaction = 2 },
+      nameplate3 = { guid = "Creature-0-6947-289-40001-10477-03", name = "Tagged", dead = true, reaction = 2, denied = true },
+      nameplate4 = { guid = "Creature-0-6947-289-40001-10478-04", name = "Friend", dead = true, reaction = 5 },
+      party1 = { guid = "Player-6949-001", name = "Wyn", dead = true, player = true },
+    }
+    UnitLevel = function(u) if u == "player" then return LEVEL end return 58 end
+    UnitGUID = function(u) return UNITS[u] and UNITS[u].guid end
+    UnitName = function(u) if u == "player" then return "Vitoc" end return UNITS[u] and UNITS[u].name end
+    UnitIsDead = function(u) return UNITS[u] and UNITS[u].dead end
+    UnitIsPlayer = function(u) return UNITS[u] and UNITS[u].player end
+    UnitIsTapDenied = function(u) return UNITS[u] and UNITS[u].denied end
+    UnitReaction = function(u) return UNITS[u] and UNITS[u].reaction end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    for _, u in ipairs({ "nameplate1", "nameplate1", "nameplate2", "nameplate3", "nameplate4", "party1" }) do e.scripts.OnEvent(e, "UNIT_HEALTH", u) end
+    e.scripts.OnEvent(e, "NAME_PLATE_UNIT_REMOVED", "nameplate1")
+    UNITS.nameplate2.dead = true
+    e.scripts.OnEvent(e, "NAME_PLATE_UNIT_REMOVED", "nameplate2")
+    local atMax = SnitchbotDB.run.kills
+    -- Below max level the XP lines count kills, so this counts nothing.
+    LEVEL = 59
+    UNITS.nameplate5 = { guid = "Creature-0-6947-289-40001-10479-05", name = "Rat", dead = true, reaction = 2 }
+    e.scripts.OnEvent(e, "UNIT_HEALTH", "nameplate5")
+    return table.concat({ atMax, SnitchbotDB.run.kills, SnitchbotDB.run.mobs["Scholomance Student"], SnitchbotDB.run.mobs["Scholomance Acolyte"], tostring(SnitchbotDB.run.mobs.Tagged) }, "|")
+  `, { ui: true });
+  assert.equal(out, "2|2|1|1|nil");
+});
+
+test("the combat log goes by what Snitchbot did: Forever always says it is off", () => {
+  const out = run(`
+    CLOCK, INSIDE, CALLS = 1000, true, {}
+    time = function() return CLOCK end
+    IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
+    GetInstanceInfo = function() return "Blackrock Spire", "party", 1, "Normal", 5, 0, false, 229 end
+    UnitIsDeadOrGhost = function() return false end
+    LoggingCombat = function(on) if on ~= nil then CALLS[#CALLS + 1] = tostring(on) end return nil end
+    SAID = {}
+    local add = DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD", true, false)
+    CLOCK = CLOCK + 30
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA") -- like the 30-second check: no second start
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD", false, true) -- a /reload keeps it on
+    local inRun = table.concat(CALLS, ",") .. ";" .. tostring(SnitchbotDB.run.logFailed)
+    INSIDE = false
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    CLOCK = CLOCK + 901
+    e.scripts.OnEvent(e, "ZONE_CHANGED_NEW_AREA")
+    local after = table.concat(CALLS, ",") .. ";" .. tostring(SnitchbotDB.startedLog)
+    -- Logged out inside and back: the game turned the log off, so it starts again.
+    INSIDE = true
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD", true, false)
+    SnitchbotDB.startedLog = true
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD", true, false)
+    return inRun .. "|" .. after .. "|" .. table.concat(CALLS, ",")
+  `, { ui: true });
+  assert.equal(out, "true;nil|true,false;nil|true,false,true,true");
+});
+
 test("the window comes back where you dragged it", () => {
   const out = run(`
     local made = CreateFrame

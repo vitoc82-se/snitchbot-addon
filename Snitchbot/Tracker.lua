@@ -153,16 +153,27 @@ end
 
 local function dungeonOf(run) return (tostring(run.key or run.name or ""):match("^[^:]*")) end
 
+--- The dungeon and the copy of it that a creature's GUID comes from:
+--- "Creature-0-6947-230-38151-8983-..." gives "230", "38151". Two groups in the
+--- same dungeon are in two copies (seen 2026-11-20). Nil for players and pets.
+function ns.InstanceCopy(guid)
+  local kind, map, copy = tostring(guid or ""):match("^(%a+)%-0%-%d+%-(%d+)%-(%d+)%-")
+  if kind ~= "Creature" and kind ~= "Vehicle" then return nil end
+  return map, copy
+end
+
 --- Folds runs of the same dungeon by the same character that are less than `gap`
 --- seconds apart into one: a wipe, a corpse run, or a step outside split them in
 --- 0.1.5 and 0.1.6. `list` is newest first. A run marked `closed` (the dungeon was
---- reset) never takes the next one in. Returns how many were folded.
+--- reset) never takes the next one in, nor does a run in another copy of the dungeon.
+--- Returns how many were folded.
 function ns.MergeRuns(list, gap)
   local folded, i = 0, 1
   while i < #list do
     local new, old = list[i], list[i + 1]
     if not old.closed and old.ended and new.started and dungeonOf(new) == dungeonOf(old)
-      and new.character == old.character and new.started - old.ended <= gap then
+      and new.character == old.character and new.started - old.ended <= gap
+      and not (new.copy and old.copy and new.copy ~= old.copy) then
       old.ended = math.max(old.ended, new.ended or new.started)
       for _, k in ipairs({ "kills", "xp", "deaths", "money" }) do old[k] = (old[k] or 0) + (new[k] or 0) end
       old.mobs = old.mobs or {}

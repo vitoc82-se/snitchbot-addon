@@ -23,7 +23,7 @@ Walk into a dungeon and Snitchbot starts a run. You get:
 - **Gold**, plus what **your loot is worth** at auction house or vendor prices
 - **Reputation** gained, deaths, and **who you ran with**
 
-Wipes, corpse runs and waiting at the door all stay part of the same run. When a run ends, Snitchbot compares it with your earlier runs of that dungeon: *"New best for The Deadmines: 35m (was 40m)."* There's also an **End run** button if you want the summary right away.
+Wipes, corpse runs and waiting at the door all stay part of the same run. A reset or a new group in the same dungeon starts a new one. When a run ends, Snitchbot compares it with your earlier runs of that dungeon: *"New best for The Deadmines: 35m (was 40m)."* There's also an **End run** button if you want the summary right away.
 
 ## Personal bests and stats
 

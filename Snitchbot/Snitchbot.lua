@@ -1802,7 +1802,7 @@ local function soon()
   if C_Timer and C_Timer.After then C_Timer.After(0.3, function() pending = false; refresh() end) else pending = false; refresh() end
 end
 
-events:SetScript("OnEvent", function(_, event, ...)
+local function onEvent(_, event, ...)
   if event == "PLAYER_LOGIN" then
     makeFrame()
     xpNow = reading()
@@ -1888,6 +1888,18 @@ events:SetScript("OnEvent", function(_, event, ...)
   else
     soon()
   end
+end
+
+-- An event argument the game hides (a secret value, see ns.secret in Code.lua)
+-- arrives as nil, so no handler errors on it.
+events:SetScript("OnEvent", function(self, event, ...)
+  local n = select("#", ...)
+  local args, hidden = { ... }, false
+  for i = 1, n do
+    if ns.secret(args[i]) then args[i], hidden = nil, true end
+  end
+  if hidden then return onEvent(self, event, (unpack or table.unpack)(args, 1, n)) end
+  return onEvent(self, event, ...)
 end)
 for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "PLAYERBANKSLOTS_CHANGED", "GET_ITEM_INFO_RECEIVED",
   "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_UNGHOST", "PLAYER_ALIVE", "PLAYER_XP_UPDATE",

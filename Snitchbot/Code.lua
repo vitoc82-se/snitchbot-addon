@@ -14,12 +14,30 @@ ns = ns or {}
 ns.SHOP_PREFIX = "SNITCHBOT:SHOP:1"
 ns.PROBE_PREFIX = "SNITCHBOT:PROBE:1"
 
+-- A value the game hides from addons: inside a dungeon, Forever hands over
+-- some unit values (a creature's GUID, seen 2026-11-22 in Stratholme) as
+-- "secret" values. Reading one (match, compare, use as a table key) is a Lua
+-- error, so they are dropped to nil.
+local function secret(v)
+  local is = issecretvalue
+  if v == nil or type(is) ~= "function" then return false end
+  local ok, yes = pcall(is, v)
+  return ok and yes == true
+end
+ns.secret = secret
+
+local function clean(v)
+  if secret(v) then return nil end
+  return v
+end
+
 -- Calls fn when it exists and doesn't error; nil otherwise. WoW Forever's API
--- isn't documented, so every game call goes through this.
+-- isn't documented, so every game call goes through this. A secret value
+-- comes back as nil.
 local function safe(fn, ...)
   if type(fn) ~= "function" then return nil end
   local ok, a, b, c, d, e, f, g, h, i, j, k = pcall(fn, ...)
-  if ok then return a, b, c, d, e, f, g, h, i, j, k end
+  if ok then return clean(a), clean(b), clean(c), clean(d), clean(e), clean(f), clean(g), clean(h), clean(i), clean(j), clean(k) end
   return nil
 end
 ns.safe = safe

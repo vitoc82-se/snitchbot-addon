@@ -157,6 +157,7 @@ local function dungeonOf(run) return (tostring(run.key or run.name or ""):match(
 --- "Creature-0-6947-230-38151-8983-..." gives "230", "38151". Two groups in the
 --- same dungeon are in two copies (seen 2026-11-20). Nil for players and pets.
 function ns.InstanceCopy(guid)
+  if type(guid) ~= "string" or (ns.secret and ns.secret(guid)) then return nil end
   local kind, map, copy = tostring(guid or ""):match("^(%a+)%-0%-%d+%-(%d+)%-(%d+)%-")
   if kind ~= "Creature" and kind ~= "Vehicle" then return nil end
   return map, copy

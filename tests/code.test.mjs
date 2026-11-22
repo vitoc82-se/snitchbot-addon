@@ -455,6 +455,44 @@ test("at max level a kill is an enemy you see die, once each", () => {
   assert.equal(out, "2|2|1|1|nil");
 });
 
+test("values the game hides in a dungeon (secret values) are dropped, not read", () => {
+  const out = run(`
+    -- A secret value: any use of it is an error, as in the game (Stratholme, 2026-11-22).
+    SECRET = setmetatable({}, {
+      __index = function() error("attempt to index a secret string value") end,
+      __tostring = function() error("attempt to convert a secret value") end,
+      __eq = function() error("attempt to compare a secret value") end,
+    })
+    issecretvalue = function(v) return rawequal(v, SECRET) end
+    CLOCK = 1000
+    time = function() return CLOCK end
+    IsInInstance = function() return true, "party" end
+    GetInstanceInfo = function() return "Stratholme", "party", 1, "Normal", 5, 0, false, 329 end
+    UnitIsDeadOrGhost = function() return false end
+    LoggingCombat = function() end
+    GetMaxPlayerLevel = function() return 60 end
+    UnitLevel = function(u) if u == "player" then return 60 end return 58 end
+    UnitGUID = function(u) if u == "player" then return "Player-6949-001" end return SECRET end
+    UnitName = function(u) if u == "player" then return "Vitoc" end return SECRET end
+    UnitIsDead = function() return true end
+    UnitIsPlayer = function() return false end
+    UnitIsTapDenied = function() return false end
+    UnitReaction = function() return 2 end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    e.scripts.OnEvent(e, "PLAYER_ENTERING_WORLD")
+    for i = 1, 5 do
+      e.scripts.OnEvent(e, "NAME_PLATE_UNIT_ADDED", "nameplate" .. i)
+      e.scripts.OnEvent(e, "UNIT_HEALTH", "nameplate" .. i)
+      e.scripts.OnEvent(e, "NAME_PLATE_UNIT_REMOVED", "nameplate" .. i)
+    end
+    e.scripts.OnEvent(e, "PLAYER_TARGET_CHANGED")
+    e.scripts.OnEvent(e, "CHAT_MSG_LOOT", SECRET)
+    return table.concat({ tostring(ns.InstanceCopy(SECRET)), tostring(ns.safe(UnitGUID, "target")), SnitchbotDB.run.name or "?", SnitchbotDB.run.kills or 0 }, "|")
+  `, { ui: true });
+  assert.equal(out, "nil|nil|Stratholme|0");
+});
+
 test("the combat log goes by what Snitchbot did: Forever always says it is off", () => {
   const out = run(`
     CLOCK, INSIDE, CALLS = 1000, true, {}

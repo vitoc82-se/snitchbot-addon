@@ -5,14 +5,14 @@ The in-game half of [Snitchbot](https://forever.snitchbot.app) for WoW Forever.
 One window with five tabs. Open it with the minimap button (or `/sb`); it stays open over reloads until you close it, and remembers where you put it.
 
 - **Raid list**: what to bring for raid night, how many you have in bags and bank, what's missing. **New list** pastes the code from **Raid list** on [auction.snitchbot.app](https://auction.snitchbot.app) (**Copy for the addon**). **Check buffs** lists who in your group has no flask, no elixir or no food, and how many have world buffs.
-- **XP**: XP per hour, time to next level, kills, gold, what your loot is worth, and the current dungeon run with an **End run** button.
+- **XP**: XP per hour, time to next level, kills, gold, what your loot is worth, and the current dungeon run with an **End run** button (or `/sb end`). A run ends by itself when you leave the area alive or leave the group outside, else 15 minutes after you step out.
 - **Runs**: every dungeon run: time, kills, XP per hour, bosses (kills and wipes), loot, gold, loot value, reputation and who you ran with. Hover a run for the details. A wipe, a corpse run or waiting at the door stays the same run; another copy of the dungeon (a reset, or a new group) is a new one. At max level a kill is an enemy you see die (your target or a nameplate), since there's no XP to count. When a run ends, Snitchbot compares it with your earlier runs of that dungeon.
 - **Stats**: time played per level and when you'll reach the next milestone, where this session's XP and gold came from, reputation, personal bests per dungeon, who you run with most, and what each boss dropped. **Copy for snitchbot.app** puts it all on your character's page on [myself.snitchbot.app](https://myself.snitchbot.app), for you only.
 - **Settings**: start the combat log in dungeons, open on entering a dungeon, tell your group, the minimap button, **Paste AH prices** (from **Copy prices for the addon** on auction.snitchbot.app) and **Probe the game**.
 
 Snitchbot also warns you when your gear is low on durability as a dungeon starts.
 
-Slash commands, all optional: `/sb` (open or close), `/sb xp`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb paste`, `/sb probe`.
+Slash commands, all optional: `/sb` (open or close), `/sb xp`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb end`, `/sb paste`, `/sb probe`.
 
 ## Development
 

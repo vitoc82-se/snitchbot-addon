@@ -153,6 +153,16 @@ end
 
 local function dungeonOf(run) return (tostring(run.key or run.name or ""):match("^[^:]*")) end
 
+--- Is the run over because you left the area? Outside, alive, and in another
+--- zone than the one you entered the dungeon from (`entry`), or, when that isn't
+--- known (logged in inside), the one you first came out into (`door`). A ghost
+--- is on a corpse run, so never.
+function ns.LeftArea(here, entry, door, alive)
+  if not alive or not here then return false end
+  local home = entry or door
+  return home ~= nil and here ~= home
+end
+
 --- The dungeon and the copy of it that a creature's GUID comes from:
 --- "Creature-0-6947-230-38151-8983-..." gives "230", "38151". Two groups in the
 --- same dungeon are in two copies (seen 2026-11-20). Nil for players and pets.

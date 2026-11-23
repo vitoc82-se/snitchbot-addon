@@ -588,7 +588,7 @@ local function endRun(closed)
   if not run then return end
   d.run = nil
   run.ended = run.leftAt or run.lastSeen or now()
-  run.lastSeen, run.leftAt, run.diedAt, run.outAt, run.backAt, run.groupOut = nil, nil, nil, nil, nil, nil
+  run.lastSeen, run.leftAt, run.diedAt, run.outAt, run.backAt, run.groupOut, run.door, run.entry = nil, nil, nil, nil, nil, nil, nil, nil
   if closed then run.closed = true end
   local list = runs()
   table.insert(list, 1, run)
@@ -652,21 +652,43 @@ local function announce()
   if channel then safe(SendChatMessage, ANNOUNCE, channel) end
 end
 
+-- The zone you're in outside ("Burning Steppes"), nil when the game doesn't say.
+local function zoneNow()
+  local z = safe(GetRealZoneText)
+  if type(z) ~= "string" or z == "" then return nil end
+  return z
+end
+
 local function checkInstance(atLogin)
   local d = db()
   local inside = instance()
   local run = d.run
+  if not inside then d.outside = zoneNow() or d.outside end
   if run and inside and runKey(run) ~= inside.key then
     endRun() -- a different dungeon
   elseif run and not inside then
     -- Out of the dungeon: a wipe, a corpse run, waiting at the door, or done.
     -- Back in within 15 minutes is the same run; after that it's over.
-    if not run.leftAt then -- the group as you left: a new one you join outside isn't this run's
+    local first = not run.leftAt
+    if first then -- the group as you left: a new one you join outside isn't this run's
       run.groupOut = {}
       for name, class in pairs(run.group or {}) do run.groupOut[name] = class end
     end
     run.leftAt = run.leftAt or (atLogin and run.lastSeen) or now()
-    if now() - run.leftAt > AWAY then endRun() end
+    local here = zoneNow()
+    run.door = run.door or here
+    local alive = not safe(UnitIsDeadOrGhost, "player")
+    local gone = ns.LeftArea(here, run.entry, run.door, alive)
+    if now() - run.leftAt > AWAY then
+      endRun()
+    elseif gone then
+      -- Alive somewhere else than where you went in (a hearth, a flight, a
+      -- walk away): done. Back in within 15 minutes, it's still one run.
+      say(string.format("Left %s: run ended.", run.name))
+      endRun()
+    elseif first and alive and not atLogin then
+      say(string.format("Out of %s. The run ends in 15 minutes, when you leave the area, or now with /sb end.", run.name))
+    end
   elseif run and atLogin and not ns.CanResume(run, now(), nil, AWAY) then
     endRun() -- logged out inside and came back much later
   end
@@ -676,13 +698,21 @@ local function checkInstance(atLogin)
     d.run = {
       key = inside.key, name = inside.name, kind = inside.kind, difficulty = inside.difficulty,
       character = me(), level = reading().level, started = now(), kills = 0, xp = 0, deaths = 0, mobs = {},
-      bosses = {}, loot = {}, group = {}, moneyStart = money(), money = 0,
+      bosses = {}, loot = {}, group = {}, moneyStart = money(), money = 0, entry = d.outside,
     }
     noteGroup(d.run)
-    say(string.format("Tracking %s: kills, XP, bosses, loot and gold.", inside.name))
-    checkGear()
-    -- A moment later, so the chat channels are ready after the loading screen.
-    if C_Timer and C_Timer.After then C_Timer.After(3, announce) else announce() end
+    -- Back within 15 minutes of a run that ended by itself: it joins that run
+    -- when this one ends (ns.MergeRuns), so it isn't announced again.
+    local last = runs()[1]
+    if last and not last.closed and runKey(last) == inside.key and last.character == me()
+      and last.ended and now() - last.ended <= AWAY then
+      say(string.format("Back in %s: same run.", inside.name))
+    else
+      say(string.format("Tracking %s: kills, XP, bosses, loot and gold.", inside.name))
+      checkGear()
+      -- A moment later, so the chat channels are ready after the loading screen.
+      if C_Timer and C_Timer.After then C_Timer.After(3, announce) else announce() end
+    end
     if settings().openInDungeon and frame then
       frame:Show()
       selectTab("xp")
@@ -690,7 +720,7 @@ local function checkInstance(atLogin)
   end
   if d.run.leftAt then d.run.outAt, d.run.backAt = d.run.leftAt, now() end -- back in: same run, unless it's another copy
   d.run.lastSeen = now()
-  d.run.leftAt = nil
+  d.run.leftAt, d.run.door = nil, nil
   d.run.key = inside.key
   d.run.difficulty = d.run.difficulty or inside.difficulty
   startCombatLog()
@@ -1585,7 +1615,8 @@ local function fillXP()
   local d = db()
   local run = d.run or runs()[1]
   show(x.endRun, d.run ~= nil)
-  x.runLabel:SetText(d.run and (d.run.leftAt and "THIS RUN · OUTSIDE" or "THIS RUN") or run and "LAST RUN" or "DUNGEON RUNS")
+  local endsIn = d.run and d.run.leftAt and math.max(0, AWAY - (now() - d.run.leftAt))
+  x.runLabel:SetText(d.run and (endsIn and ("THIS RUN · OUTSIDE · ENDS IN " .. ns.Duration(endsIn):upper()) or "THIS RUN") or run and "LAST RUN" or "DUNGEON RUNS")
   if run then
     x.runName:SetText(run.name)
     x.runLine:SetText(runLine(run, t))
@@ -1866,7 +1897,14 @@ local function onEvent(_, event, ...)
   elseif event == "PLAYER_MONEY" then
     onMoney()
   elseif event == "GROUP_ROSTER_UPDATE" then
-    noteGroup(db().run)
+    local run = db().run
+    if run and run.leftAt and next(run.groupOut or {}) and not safe(IsInGroup) then
+      -- Out of the dungeon and out of the group: you can't get back into that copy.
+      say(string.format("Left the group: %s run ended.", run.name))
+      endRun()
+    else
+      noteGroup(run)
+    end
   elseif event == "PLAYER_LEVEL_UP" then
     onLevelUp((...))
   elseif event == "QUEST_TURNED_IN" then
@@ -1928,6 +1966,13 @@ SlashCmdList.SNITCHBOT = function(msg)
     buffCheck()
   elseif cmd == "export" then
     exportCode()
+  elseif cmd == "end" then
+    if db().run then
+      endRunNow()
+      update()
+    else
+      say("No run is open.")
+    end
   elseif cmd == "xp" or cmd == "runs" or cmd == "stats" or cmd == "settings" or cmd == "raid" then
     frame:Show()
     selectTab(cmd)

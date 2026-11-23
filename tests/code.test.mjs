@@ -455,6 +455,93 @@ test("at max level a kill is an enemy you see die, once each", () => {
   assert.equal(out, "2|2|1|1|nil");
 });
 
+test("a run ends when you leave the area alive, leave the group outside, or type /sb end; a corpse run or the door keeps it", () => {
+  const out = run(`
+    CLOCK, INSIDE, ZONE, GHOST, GROUP = 1000, false, "Blackrock Mountain", false, true
+    time = function() return CLOCK end
+    IsInInstance = function() if INSIDE then return true, "party" end return false, "none" end
+    GetInstanceInfo = function() return "Blackrock Depths", "party", 1, "Normal", 5, 0, false, 230 end
+    GetRealZoneText = function() if INSIDE then return "Blackrock Depths" end return ZONE end
+    UnitIsDeadOrGhost = function() return GHOST end
+    UnitLevel = function() return 60 end
+    LoggingCombat = function() end
+    IsInGroup = function() return GROUP end
+    IsInRaid = function() return false end
+    UnitName = function(u) if u == "party1" then return "Kesh" end if u == "player" then return "Vitoc War" end return nil end
+    UnitClass = function() return "Rogue", "ROGUE" end
+    CHAT = {}
+    SendChatMessage = function(msg, channel) CHAT[#CHAT + 1] = msg end
+    local e = SnitchbotEvents
+    local function go(event, ...) e.scripts.OnEvent(e, event, ...) end
+    local function enter() INSIDE = true; go("PLAYER_ENTERING_WORLD") end
+    local function leave(zone) INSIDE = false; ZONE = zone or ZONE; go("PLAYER_ENTERING_WORLD") end
+    -- The Snitchbot line containing text, said since mark (nil if none).
+    local mark = 0
+    local function said(text)
+      for i = mark + 1, #SAID do
+        local line = SAID[i]:gsub("^|c%x+Snitchbot:|r ", "")
+        if line:find(text, 1, true) then return line end
+      end
+      return "none"
+    end
+    local r = {}
+    go("PLAYER_LOGIN")
+    go("ZONE_CHANGED_NEW_AREA")
+    enter()
+    -- 1. Wipe: a ghost at the graveyard in another zone keeps the run.
+    CLOCK = CLOCK + 300; GHOST = true; leave("Burning Steppes")
+    r[#r + 1] = tostring(SnitchbotDB.run ~= nil)
+    GHOST = false; ZONE = "Blackrock Mountain"; enter()
+    -- 2. Waiting at the door: still open, and the XP tab counts down.
+    mark = #SAID; CLOCK = CLOCK + 300; leave()
+    r[#r + 1] = tostring(SnitchbotDB.run ~= nil)
+    r[#r + 1] = said("Out of")
+    CLOCK = CLOCK + 120; go("ZONE_CHANGED_NEW_AREA")
+    -- 3. Hearth to Ironforge: ended at once.
+    mark = #SAID; CLOCK = CLOCK + 60; ZONE = "Ironforge"; go("ZONE_CHANGED_NEW_AREA")
+    r[#r + 1] = tostring(SnitchbotDB.run ~= nil)
+    r[#r + 1] = said("Left")
+    -- 4. Back in within 15 minutes: no second announcement, and one run in the list.
+    local announced = #CHAT
+    mark = #SAID; ZONE = "Blackrock Mountain"; go("ZONE_CHANGED_NEW_AREA"); CLOCK = CLOCK + 200; enter()
+    r[#r + 1] = said("Back in") .. "/" .. said("Tracking")
+    -- 5. Out of the dungeon and out of the group: ended.
+    CLOCK = CLOCK + 100; leave(); GROUP = false; go("GROUP_ROSTER_UPDATE")
+    r[#r + 1] = tostring(SnitchbotDB.run ~= nil)
+    r[#r + 1] = #SnitchbotDB.runs
+    r[#r + 1] = tostring(#CHAT == announced)
+    -- 6. /sb end, from anywhere.
+    GROUP = true; CLOCK = CLOCK + 3600; enter(); CLOCK = CLOCK + 60
+    SlashCmdList.SNITCHBOT("end")
+    r[#r + 1] = tostring(SnitchbotDB.run ~= nil)
+    mark = #SAID; SlashCmdList.SNITCHBOT("end")
+    r[#r + 1] = said("No run")
+    return table.concat(r, "|")
+  `, { ui: true });
+  assert.equal(out, [
+    "true", "true",
+    "Out of Blackrock Depths. The run ends in 15 minutes, when you leave the area, or now with /sb end.",
+    "false", "Left Blackrock Depths: run ended.",
+    "Back in Blackrock Depths: same run./none",
+    "false", "1", "true",
+    "false", "No run is open.",
+  ].join("|"));
+});
+
+test("ns.LeftArea: alive elsewhere than where you went in", () => {
+  const out = run(`
+    return table.concat({
+      tostring(ns.LeftArea("Ironforge", "Blackrock Mountain", "Ironforge", true)),
+      tostring(ns.LeftArea("Blackrock Mountain", "Blackrock Mountain", "Blackrock Mountain", true)),
+      tostring(ns.LeftArea("Burning Steppes", "Blackrock Mountain", "Burning Steppes", false)),
+      tostring(ns.LeftArea("Ironforge", nil, "Blackrock Mountain", true)),
+      tostring(ns.LeftArea("Ironforge", nil, nil, true)),
+      tostring(ns.LeftArea(nil, "Blackrock Mountain", nil, true)),
+    }, "|")
+  `);
+  assert.equal(out, "true|false|false|true|false|false");
+});
+
 test("values the game hides in a dungeon (secret values) are dropped, not read", () => {
   const out = run(`
     -- A secret value: any use of it is an error, as in the game (Stratholme, 2026-11-22).

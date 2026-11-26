@@ -42,6 +42,10 @@ The **Stats** tab collects it all:
 - **Check buffs:** one click lists who in your group is missing a flask, an elixir or food, and how many have world buffs.
 - **Repair warning:** if your gear is low on durability when a dungeon starts, you hear about it before the pull.
 
+## Level a profession
+
+- **Craft:** from your skill now to 300, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Blacksmithing first.
+
 ## Your stats on the web
 
 Press **Copy for snitchbot.app** and paste it on [myself.snitchbot.app](https://myself.snitchbot.app). Your character's page then shows your runs, personal bests, time per level and where your gold came from. Only you can see it.

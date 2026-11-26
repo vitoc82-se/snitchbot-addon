@@ -12,7 +12,7 @@ const file = (f) => readFileSync(new URL(`../Snitchbot/${f}`, import.meta.url), 
 function run(script, { ui = false } = {}) {
   const L = lauxlib.luaL_newstate();
   lualib.luaL_openlibs(L);
-  for (const [name, src] of [["CODE_LUA", file("Code.lua")], ["TRACKER_LUA", file("Tracker.lua")], ["STATS_LUA", file("Stats.lua")], ["UI_LUA", file("Snitchbot.lua")]]) {
+  for (const [name, src] of [["CODE_LUA", file("Code.lua")], ["TRACKER_LUA", file("Tracker.lua")], ["STATS_LUA", file("Stats.lua")], ["CRAFT_LUA", file("Craft.lua")], ["UI_LUA", file("Snitchbot.lua")]]) {
     lua.lua_pushstring(L, to_luastring(src));
     lua.lua_setglobal(L, to_luastring(name));
   }
@@ -21,6 +21,7 @@ function run(script, { ui = false } = {}) {
     assert(load(CODE_LUA, "Code.lua"))("Snitchbot", ns)
     assert(load(TRACKER_LUA, "Tracker.lua"))("Snitchbot", ns)
     assert(load(STATS_LUA, "Stats.lua"))("Snitchbot", ns)
+    assert(load(CRAFT_LUA, "Craft.lua"))("Snitchbot", ns)
     ${ui ? `${FAKE_UI}\n assert(load(UI_LUA, "Snitchbot.lua"))("Snitchbot", ns)` : ""}
   `;
   if (lauxlib.luaL_dostring(L, to_luastring(`${prelude}\n${script}`)) !== lua.LUA_OK) {
@@ -134,6 +135,76 @@ test("the UI loads, pastes a list and shows what's short", () => {
   assert.match(out, /\|2 of 3 ready for raid night\|67%\|Vitoc War$/);
   assert.match(out, /1 of 3 items short/);
   assert.match(out, /Raid list for Vitoc War saved: 3 items for Onyxia's Lair \(40\)/);
+});
+
+test("craft plan: crafts left from your skill, parts made from stone, what you have, the price and the rank to train", () => {
+  const out = run(`
+    local plan = ns.CRAFT_PLANS[164]
+    -- Skill 85: half of 80-90 Rough Bronze Leggings is left (5 of 10).
+    local HAVE = { [2841] = 100, [3478] = 10, [5956] = 1 }
+    local PRICE = { [2841] = 175, [2836] = 200, [12359] = 2187 }
+    local p = ns.CraftPlan(plan, 85, function(id) return HAVE[id] or 0 end, function(id) return PRICE[id] end, function(spell) return spell == 10013 end, 150)
+    local by = {}
+    for _, r in ipairs(p.rows) do by[r.id] = r end
+    local first = p.steps[1]
+    local r = {
+      first.name, first.crafts, tostring(first.current), #p.steps,
+      -- Bronze: 30 (80-90 half) + 90 + 88 + 85 = 293, 100 in bags.
+      by[2841].need, by[2841].have, by[2841].missing, by[2841].cost,
+      -- Coarse Grinding Stone: 34 needed, 10 in bags, 24 made from 48 Coarse Stone.
+      tostring(by[3478].made), by[3478].missing, by[2836].need, by[2836].cost,
+      -- The hammer is in your bags; Ebon Shiv plans are known, the other two aren't.
+      by[5956].missing, tostring(by[8030] ~= nil), tostring(by[251468] ~= nil), by[251468].plans.npc,
+      p.rank.name, p.rank.at, tostring(p.unpriced > 0),
+    }
+    local done = ns.CraftPlan(plan, 300)
+    r[#r + 1] = tostring(done.done) .. "/" .. #done.rows .. "/" .. #done.steps
+    local fresh = ns.CraftPlan(plan, 1)
+    r[#r + 1] = fresh.crafts
+    return table.concat(r, "|")
+  `);
+  assert.equal(out, [
+    "Rough Bronze Leggings", 5, "true", 26,
+    293, 100, 193, 193 * 175,
+    "true", 24, 48, 48 * 200,
+    0, "false", "true", "Pexmit",
+    "Expert", 150, "true",
+    "true/0/0",
+    401, // the guide's 30 steps add up to 401 crafts
+  ].join("|"));
+});
+
+test("the Craft tab: reads your skill, prices the shopping list, and lists the steps", () => {
+  const out = run(`
+    GetProfessions = function() return 3, 4 end
+    GetProfessionInfo = function(i)
+      if i == 3 then return "Blacksmithing", 136241, 80, 150, 0, 0, 164 end
+      return "Mining", 136248, 115, 150, 0, 0, 186
+    end
+    BAGS = { [2841] = 60 }
+    C_Item.GetItemCount = function(id, bank) return BAGS[id] or 0 end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    SnitchbotDB.prices = { house = "EU-NORMAL-ALLIANCE", at = 1, count = 2, prices = { [2841] = 175, [3860] = 1309 } }
+    SlashCmdList.SNITCHBOT("craft")
+    local k = SnitchbotFrame.k
+    local shop = { k.who.text, k.sub.text, k.status.text, k.ready.text, k.view.label.text }
+    BAGS[2841] = 400
+    e.scripts.OnEvent(e, "BAG_UPDATE_DELAYED")
+    shop[#shop + 1] = k.ready.text
+    k.view.scripts.OnClick()
+    local steps = { k.rows[1].name.text, k.rows[1].count.text, k.ready.text, k.view.label.text }
+    return table.concat(shop, "~") .. "#" .. table.concat(steps, "~")
+  `, { ui: true });
+  const [shop, steps] = out.split("#");
+  const s = shop.split("~");
+  assert.equal(s[0], "Blacksmithing 80 / 150");
+  assert.equal(s[1], "Next: Rough Bronze Leggings x10 (80-90)  ·  312 crafts to 300");
+  assert.match(s[2], /Train Expert: your cap is 150\./);
+  assert.match(s[3], /^0 of \d+ materials ready$/);
+  assert.equal(s[4], "Steps");
+  assert.match(s[5], /^1 of \d+ materials ready$/);
+  assert.deepEqual(steps.split("~"), ["80-90  Rough Bronze Leggings", "x10", "Skill 80 of 300", "Shopping"]);
 });
 
 test("shift-click puts the item link in chat with Forever's C_Item", () => {

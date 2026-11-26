@@ -318,6 +318,14 @@ local function makeRow(parent, i)
 
   row:SetScript("OnEnter", function(self)
     self.hover:Show()
+    if self.tip and GameTooltip then
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      for i, line in ipairs(self.tip) do
+        if i == 1 then GameTooltip:AddLine(line, C.text[1], C.text[2], C.text[3]) else GameTooltip:AddLine(line, C.dim[1], C.dim[2], C.dim[3], true) end
+      end
+      GameTooltip:Show()
+      return
+    end
     if not self.itemId or not GameTooltip then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     safe(GameTooltip.SetItemByID, GameTooltip, self.itemId)
@@ -985,7 +993,8 @@ end
 -- ---- The window: one window, five tabs, everything a click away.
 
 local TABS = {
-  { key = "raid", label = "Raid list" },
+  { key = "raid", label = "Raid" },
+  { key = "craft", label = "Craft" },
   { key = "xp", label = "XP" },
   { key = "runs", label = "Runs" },
   { key = "stats", label = "Stats" },
@@ -1390,6 +1399,117 @@ local function makeSettingsPane(p)
   about:SetText("Snitchbot " .. version .. "  ·  snitchbot.app")
 end
 
+-- ---- Craft: leveling a profession to the cap, with a shopping list and a price.
+
+-- Your professions with their skill: { { line, name, rank, max } }.
+local function professions()
+  local out = {}
+  if type(GetProfessions) == "function" and type(GetProfessionInfo) == "function" then
+    local list = { safe(GetProfessions) }
+    for i = 1, 6 do
+      local index = list[i]
+      if index then
+        local name, _, rank, maxRank, _, _, line = safe(GetProfessionInfo, index)
+        if name and tonumber(line) then out[#out + 1] = { line = tonumber(line), name = name, rank = tonumber(rank) or 0, max = tonumber(maxRank) } end
+      end
+    end
+  end
+  if #out == 0 and type(GetNumSkillLines) == "function" and type(GetSkillLineInfo) == "function" then
+    -- The classic list has names, not ids: match them to the plans.
+    for i = 1, tonumber(safe(GetNumSkillLines)) or 0 do
+      local name, header, _, rank, _, _, maxRank = safe(GetSkillLineInfo, i)
+      if name and not header then
+        for line, plan in pairs(ns.CRAFT_PLANS) do
+          if plan.name == name then out[#out + 1] = { line = line, name = name, rank = tonumber(rank) or 0, max = tonumber(maxRank) } end
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- The profession with a plan to show: the one you picked, else the first with a plan.
+local function craftProfession()
+  local list, pick = professions(), settings().craftLine
+  local first
+  for _, p in ipairs(list) do
+    if ns.CraftPlanFor(p.line) then
+      if p.line == pick then return p end
+      first = first or p
+    end
+  end
+  return first
+end
+
+local function craftPlan()
+  local p = craftProfession()
+  if not p then return nil end
+  local prices = db().prices
+  prices = type(prices) == "table" and type(prices.prices) == "table" and prices.prices or {}
+  local plan = ns.CraftPlanFor(p.line)
+  local out = ns.CraftPlan(plan, p.rank,
+    function(id) return count(id, true) end,
+    function(id) return prices[id] end,
+    function(spell) return safe(IsPlayerSpell, spell) == true end,
+    p.max)
+  return out, plan, p
+end
+
+local function makeCraftPane(p)
+  local k = {}
+  frame.k = k
+  local listTop, footerHeight = 82, 44
+  k.who = text(p, 16, "semibold", C.text)
+  k.who:SetPoint("TOPLEFT", PAD, -14)
+  k.who:SetPoint("RIGHT", -PAD - 100, 0)
+  k.sub = text(p, 12, "regular", C.muted)
+  k.sub:SetPoint("TOPLEFT", PAD, -36)
+  k.sub:SetPoint("RIGHT", -PAD, 0)
+  k.status = text(p, 12, "medium", C.dim)
+  k.status:SetPoint("TOPLEFT", PAD, -54)
+  k.status:SetPoint("RIGHT", -PAD, 0)
+  k.view = smallButton(p, "Steps", 84)
+  k.view:SetPoint("TOPRIGHT", -PAD, -12)
+  k.view:SetScript("OnClick", function()
+    settings().craftView = settings().craftView == "steps" and "shop" or "steps"
+    update()
+  end)
+  k.rule = divider(p, -(listTop - 6))
+  local sf, child = scrollArea(p, ROW_HEIGHT * 2)
+  sf:SetPoint("TOPLEFT", PAD - 4, -listTop)
+  sf:SetPoint("BOTTOMRIGHT", -(PAD - 4), footerHeight + 4)
+  child:SetSize(WIDTH - 2 * (PAD - 4), ROW_HEIGHT)
+  k.scroll, k.child, k.rows = sf, child, {}
+
+  local footer = CreateFrame("Frame", nil, p)
+  footer:SetPoint("BOTTOMLEFT")
+  footer:SetPoint("BOTTOMRIGHT")
+  footer:SetHeight(footerHeight)
+  fill(footer, C.footer):SetAllPoints()
+  local top = fill(footer, C.line, "ARTWORK")
+  top:SetHeight(1)
+  top:SetPoint("TOPLEFT")
+  top:SetPoint("TOPRIGHT")
+  k.ready = text(footer, 12, "regular", C.dim)
+  k.ready:SetPoint("TOPLEFT", PAD - 1, -9)
+  k.pct = text(footer, 12, "medium", C.dim)
+  k.pct:SetPoint("BOTTOMRIGHT", -PAD + 1, 8)
+  k.pct:SetJustifyH("RIGHT")
+  k.track = fill(footer, C.track, "ARTWORK")
+  k.track:SetHeight(3)
+  k.track:SetPoint("BOTTOMLEFT", PAD - 1, 12)
+  k.track:SetWidth(TRACK)
+  k.bar = fill(footer, C.accent, "OVERLAY")
+  k.bar:SetHeight(3)
+  k.bar:SetPoint("LEFT", k.track, "LEFT")
+  k.footer = footer
+
+  k.empty = text(p, 13, "regular", C.dim)
+  k.empty:SetPoint("TOPLEFT", PAD, -50)
+  k.empty:SetPoint("RIGHT", -PAD, 0)
+  safe(k.empty.SetWordWrap, k.empty, true)
+end
+
 local function makeTabs()
   local bar = CreateFrame("Frame", nil, frame)
   bar:SetPoint("TOPLEFT", 1, -33)
@@ -1400,13 +1520,21 @@ local function makeTabs()
   under:SetPoint("BOTTOMLEFT")
   under:SetPoint("BOTTOMRIGHT")
   local x = PAD - 4
-  for _, t in ipairs(TABS) do
+  local labels, sum = {}, 0
+  for i, t in ipairs(TABS) do
     local b = CreateFrame("Button", nil, bar)
     b.label = text(b, 12, "semibold", C.muted)
     b.label:SetPoint("CENTER", 0, 0)
     b.label:SetJustifyH("CENTER")
     b.label:SetText(t.label)
-    local w = math.max(40, (tonumber(safe(b.label.GetStringWidth, b.label)) or 40) + 22)
+    labels[i] = b
+    sum = sum + (tonumber(safe(b.label.GetStringWidth, b.label)) or 30)
+  end
+  local room = WIDTH - 2 * (PAD - 4) - 4 * (#TABS - 1)
+  local pad = math.max(10, math.min(22, math.floor((room - sum) / #TABS)))
+  for i, t in ipairs(TABS) do
+    local b = labels[i]
+    local w = math.max(34, (tonumber(safe(b.label.GetStringWidth, b.label)) or 30) + pad)
     b:SetSize(w, TOP - 34)
     b:SetPoint("BOTTOMLEFT", x, 0)
     x = x + w + 4
@@ -1493,6 +1621,7 @@ local function makeFrame()
     panes[t.key] = p
   end
   makeRaidPane(panes.raid)
+  makeCraftPane(panes.craft)
   makeXPPane(panes.xp)
   makeRunsPane(panes.runs)
   makeStatsPane(panes.stats)
@@ -1502,7 +1631,7 @@ local function makeFrame()
   local elapsed = 0
   frame:SetScript("OnUpdate", function(_, dt)
     elapsed = elapsed + (dt or 0)
-    if elapsed >= 1 then elapsed = 0; if settings().tab ~= "raid" then update() end end
+    if elapsed >= 1 then elapsed = 0; if settings().tab ~= "raid" and settings().tab ~= "craft" then update() end end
   end)
   frame:SetScript("OnShow", function() settings().open = true; selectTab(settings().tab) end)
   frame:Hide()
@@ -1812,10 +1941,106 @@ local function fillSettings()
   end
 end
 
+local function fillCraft()
+  local k = frame.k
+  local out, plan, prof = craftPlan()
+  for _, r in ipairs(k.rows) do r:Hide() end
+  local has = out ~= nil
+  for _, part in ipairs({ k.who, k.sub, k.status, k.rule, k.scroll, k.footer, k.view }) do show(part, has) end
+  show(k.empty, not has)
+  if not has then
+    local names = {}
+    for _, pl in pairs(ns.CRAFT_PLANS) do names[#names + 1] = pl.name end
+    table.sort(names)
+    k.empty:SetText("No leveling plan for your professions yet.\n\nPlans so far: " .. table.concat(names, ", ") .. ".")
+    return
+  end
+  local steps = settings().craftView == "steps"
+  k.view.label:SetText(steps and "Shopping" or "Steps")
+  k.who:SetText(string.format("%s %d / %d", plan.name, out.skill, prof.max or plan.max))
+  local next = out.steps[1]
+  if out.done then
+    k.sub:SetText("Done: you're at " .. plan.max .. ".")
+  else
+    k.sub:SetText(string.format("Next: %s x%d (%d-%d)  ·  %d crafts to %d", next.name, next.crafts, next.from, next.to, out.crafts, plan.max))
+  end
+  local prices = db().prices
+  local house = type(prices) == "table" and prices.house
+  if out.rank then
+    k.status:SetText(string.format("%sTrain %s: your cap is %d.|r", hex(C.danger), out.rank.name, prof.max or 0))
+  elseif out.done then
+    k.status:SetText("")
+  elseif not house then
+    k.status:SetText(hex(C.muted) .. "No prices yet: /sb prices to paste them from auction.snitchbot.app.|r")
+  else
+    k.status:SetText(string.format("To buy: %s%s|r at the AH%s", hex(C.accent), ns.Money(out.cost),
+      out.unpriced > 0 and string.format("  ·  %d without a price", out.unpriced) or ""))
+  end
+
+  local list = {}
+  if steps then
+    for _, s in ipairs(out.steps) do
+      local tip = { s.name, string.format("Skill %d to %d: about %d crafts.", s.from, s.to, s.crafts) }
+      if s.learn then tip[#tip + 1] = string.format("Plans from %s, %s.", s.learn.npc, s.learn.zone) else tip[#tip + 1] = "From the trainer." end
+      list[#list + 1] = {
+        icon = safe(GetSpellTexture, s.spell) or "Interface\\Icons\\Trade_BlackSmithing",
+        name = string.format("%d-%d  %s", s.from, s.to, s.name),
+        color = s.current and C.accent or C.text,
+        count = string.format("x%d", s.crafts), done = false, tip = tip,
+      }
+    end
+  else
+    for _, r in ipairs(out.rows) do
+      local name = itemName(r.id)
+      local done = r.missing == 0
+      local right
+      if r.made then
+        right = done and string.format("%d / %d", r.have, r.need) or string.format("%s%d / %d  ·  make %d|r", hex(C.muted), r.have, r.need, r.missing)
+      else
+        local cost = r.missing > 0 and (r.cost and ("  ·  " .. ns.Money(r.cost)) or "  ·  no price") or ""
+        right = string.format("%s%d / %d|r%s", hex(done and C.dim or C.danger), r.have, r.need, cost)
+      end
+      local tip
+      if r.plans then tip = { name or ("Item " .. r.id), string.format("Sold by %s, %s.", r.plans.npc, r.plans.zone) } end
+      list[#list + 1] = { id = r.id, icon = itemIcon(r.id), name = name or ("Item " .. r.id), color = name and C.item or C.muted,
+        count = right, done = done, tip = tip }
+    end
+  end
+  k.child:SetHeight(math.max(ROW_HEIGHT, #list * ROW_HEIGHT))
+  local ready = 0
+  for i, it in ipairs(list) do
+    k.rows[i] = k.rows[i] or makeRow(k.child, i)
+    local r = k.rows[i]
+    r.itemId, r.bank, r.tip = it.id, nil, it.tip
+    r.icon:SetTexture(it.icon)
+    r.name:SetText(it.name)
+    r.name:SetTextColor(it.color[1], it.color[2], it.color[3])
+    r.count:SetText(it.count)
+    show(r.box, not steps)
+    show(r.boxFill, it.done)
+    show(r.tick, it.done)
+    if it.done then ready = ready + 1 end
+    r:Show()
+  end
+  local share
+  if steps then
+    k.ready:SetText(string.format("Skill %d of %d", out.skill, plan.max))
+    share = out.skill / plan.max
+  else
+    k.ready:SetText(string.format("%d of %d materials ready", ready, #list))
+    share = #list > 0 and ready / #list or 1
+  end
+  k.bar:SetWidth(math.max(0.01, TRACK * share))
+  show(k.bar, share > 0)
+  k.pct:SetText(string.format("%d%%", math.floor(share * 100 + 0.5)))
+  if k.scroll.place then k.scroll.place() end
+end
+
 update = function()
   if not frame or not frame:IsShown() then return end
   local tab = settings().tab
   if tab == "raid" then refresh()
+  elseif tab == "craft" then fillCraft()
   elseif tab == "xp" then fillXP()
   elseif tab == "runs" then fillRuns()
   elseif tab == "stats" then fillStats()
@@ -1830,7 +2055,7 @@ local function soon()
   -- Bag events come in bursts: redraw once, a moment later.
   if pending then return end
   pending = true
-  if C_Timer and C_Timer.After then C_Timer.After(0.3, function() pending = false; refresh() end) else pending = false; refresh() end
+  if C_Timer and C_Timer.After then C_Timer.After(0.3, function() pending = false; update() end) else pending = false; update() end
 end
 
 local function onEvent(_, event, ...)
@@ -1946,7 +2171,8 @@ for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "
   "MERCHANT_SHOW", "MERCHANT_CLOSED", "MAIL_SHOW", "MAIL_CLOSED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
   "TRAINER_SHOW", "TRAINER_CLOSED", "TAXIMAP_OPENED", "TAXIMAP_CLOSED", "TRADE_SHOW", "TRADE_CLOSED",
   "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_LOGOUT",
-  "UNIT_HEALTH", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT" }) do
+  "UNIT_HEALTH", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
+  "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL", "LEARNED_SPELL_IN_TAB" }) do
   pcall(events.RegisterEvent, events, e)
 end
 
@@ -1973,7 +2199,7 @@ SlashCmdList.SNITCHBOT = function(msg)
     else
       say("No run is open.")
     end
-  elseif cmd == "xp" or cmd == "runs" or cmd == "stats" or cmd == "settings" or cmd == "raid" then
+  elseif cmd == "xp" or cmd == "runs" or cmd == "stats" or cmd == "settings" or cmd == "raid" or cmd == "craft" then
     frame:Show()
     selectTab(cmd)
   else

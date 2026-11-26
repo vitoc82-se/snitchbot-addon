@@ -12,4 +12,5 @@
 Code.lua
 Tracker.lua
 Stats.lua
+Craft.lua
 Snitchbot.lua

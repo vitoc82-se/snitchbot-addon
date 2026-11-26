@@ -1443,6 +1443,22 @@ local function craftProfession()
   return first
 end
 
+-- The skill you want to reach in a profession: nil for the plan's cap.
+local function craftGoal(line)
+  local goals = settings().craftGoal
+  return type(goals) == "table" and tonumber(goals[line]) or nil
+end
+
+local function setCraftGoal(line, n)
+  local plan = ns.CraftPlanFor(line)
+  if not plan then return nil end
+  local s = settings()
+  s.craftGoal = type(s.craftGoal) == "table" and s.craftGoal or {}
+  n = tonumber(n)
+  s.craftGoal[line] = n and n < plan.max and ns.CraftGoal(plan, n) or nil
+  return ns.CraftGoal(plan, s.craftGoal[line])
+end
+
 local function craftPlan()
   local p = craftProfession()
   if not p then return nil end
@@ -1453,7 +1469,7 @@ local function craftPlan()
     function(id) return count(id, true) end,
     function(id) return prices[id] end,
     function(spell) return safe(IsPlayerSpell, spell) == true end,
-    p.max)
+    p.max, craftGoal(p.line))
   return out, plan, p
 end
 
@@ -1463,19 +1479,52 @@ local function makeCraftPane(p)
   local listTop, footerHeight = 82, 44
   k.who = text(p, 16, "semibold", C.text)
   k.who:SetPoint("TOPLEFT", PAD, -14)
-  k.who:SetPoint("RIGHT", -PAD - 100, 0)
+  k.who:SetPoint("RIGHT", -PAD - 160, 0)
   k.sub = text(p, 12, "regular", C.muted)
   k.sub:SetPoint("TOPLEFT", PAD, -36)
   k.sub:SetPoint("RIGHT", -PAD, 0)
   k.status = text(p, 12, "medium", C.dim)
   k.status:SetPoint("TOPLEFT", PAD, -54)
   k.status:SetPoint("RIGHT", -PAD, 0)
-  k.view = smallButton(p, "Steps", 84)
+  k.view = smallButton(p, "Steps", 76)
   k.view:SetPoint("TOPRIGHT", -PAD, -12)
   k.view:SetScript("OnClick", function()
     settings().craftView = settings().craftView == "steps" and "shop" or "steps"
     update()
   end)
+  -- The goal: type the skill you want to reach and press Enter (empty for the cap).
+  local box = CreateFrame("EditBox", nil, p)
+  box:SetSize(44, 22)
+  box:SetPoint("TOPRIGHT", k.view, "TOPLEFT", -8, 0)
+  fill(box, C.well):SetAllPoints()
+  hairline(box, C.border)
+  box:SetAutoFocus(false)
+  box:SetNumeric(true)
+  box:SetMaxLetters(3)
+  box:SetFontObject(ChatFontNormal or GameFontHighlight)
+  safe(box.SetFont, box, FONT.medium, 12, "")
+  box:SetTextColor(C.text[1], C.text[2], C.text[3])
+  box:SetJustifyH("CENTER")
+  local function apply()
+    local prof = craftProfession()
+    if prof then setCraftGoal(prof.line, box:GetText()) end
+    box:ClearFocus()
+    update()
+  end
+  box:SetScript("OnEnterPressed", apply)
+  box:SetScript("OnEscapePressed", function() box:ClearFocus(); update() end)
+  box:SetScript("OnEnter", function()
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(box, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine("Goal")
+    GameTooltip:AddLine("The skill you want to reach. Type it and press Enter; empty for the cap.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  box:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  k.goal = box
+  k.goalLabel = text(p, 12, "medium", C.muted)
+  k.goalLabel:SetPoint("RIGHT", box, "LEFT", -6, 0)
+  k.goalLabel:SetText("Goal")
   k.rule = divider(p, -(listTop - 6))
   local sf, child = scrollArea(p, ROW_HEIGHT * 2)
   sf:SetPoint("TOPLEFT", PAD - 4, -listTop)
@@ -2127,7 +2176,7 @@ local function fillCraft()
   local out, plan, prof = craftPlan()
   for _, r in ipairs(k.rows) do r:Hide() end
   local has = out ~= nil
-  for _, part in ipairs({ k.who, k.sub, k.status, k.rule, k.scroll, k.footer, k.view }) do show(part, has) end
+  for _, part in ipairs({ k.who, k.sub, k.status, k.rule, k.scroll, k.footer, k.view, k.goal, k.goalLabel }) do show(part, has) end
   show(k.empty, not has)
   if not has then
     local names = {}
@@ -2138,12 +2187,15 @@ local function fillCraft()
   end
   local steps = settings().craftView == "steps"
   k.view.label:SetText(steps and "Shopping" or "Steps")
-  k.who:SetText(string.format("%s %d / %d", plan.name, out.skill, prof.max or plan.max))
+  k.who:SetText(string.format("%s %d", plan.name, out.skill))
+  if not safe(k.goal.HasFocus, k.goal) then k.goal:SetText(tostring(out.max)) end
   local next = out.steps[1]
-  if out.done then
+  if out.done and out.max >= plan.max then
     k.sub:SetText("Done: you're at " .. plan.max .. ".")
+  elseif out.done then
+    k.sub:SetText(string.format("Goal reached: you're at %d. Raise the goal to go on.", out.skill))
   else
-    k.sub:SetText(string.format("Next: %s x%d (%d-%d)  ·  %d crafts to %d", next.name, next.crafts, next.from, next.to, out.crafts, plan.max))
+    k.sub:SetText(string.format("Next: %s x%d (%d-%d)  ·  %d crafts to %d", next.name, next.crafts, next.from, next.to, out.crafts, out.max))
   end
   local prices = db().prices
   local house = type(prices) == "table" and prices.house
@@ -2205,8 +2257,8 @@ local function fillCraft()
   end
   local share
   if steps then
-    k.ready:SetText(string.format("Skill %d of %d", out.skill, plan.max))
-    share = out.skill / plan.max
+    k.ready:SetText(string.format("Skill %d of %d", out.skill, out.max))
+    share = math.min(1, out.skill / out.max)
   else
     k.ready:SetText(string.format("%d of %d materials ready", ready, #list))
     share = #list > 0 and ready / #list or 1
@@ -2394,6 +2446,20 @@ SlashCmdList.SNITCHBOT = function(msg)
     else
       say("No run is open.")
     end
+  elseif cmd == "craft" and tostring(msg):match("^%s*%S+%s+(%S+)") then
+    -- /sb craft 250 levels to 250; /sb craft max goes back to the cap.
+    local arg = tostring(msg):match("^%s*%S+%s+(%S+)"):lower()
+    local prof = craftProfession()
+    if not prof then
+      say("No leveling plan for your professions yet.")
+    elseif tonumber(arg) or arg == "max" then
+      local goal = setCraftGoal(prof.line, tonumber(arg))
+      say(string.format("%s goal: %d.", prof.name, goal))
+    else
+      say("/sb craft 250 sets the goal; /sb craft max goes back to the cap.")
+    end
+    frame:Show()
+    selectTab("craft")
   elseif cmd == "xp" or cmd == "runs" or cmd == "stats" or cmd == "settings" or cmd == "raid" or cmd == "craft" then
     frame:Show()
     selectTab(cmd)

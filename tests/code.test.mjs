@@ -174,6 +174,71 @@ test("craft plan: crafts left from your skill, parts made from stone, what you h
   ].join("|"));
 });
 
+test("craft plan to a goal: stops at the goal, cuts the step it falls in, and asks for no rank past it", () => {
+  const out = run(`
+    local plan = ns.CRAFT_PLANS[164]
+    -- Skill 80 to 250: the last steps are 215-225 Heavy Mithril Breastplate (10), 225-235 Dense Weightstone (15),
+    -- 235-240 Mithril Coif (12), 240-246 Heavy Mithril Boots (17), 246-250 Big Black Mace (12).
+    local p = ns.CraftPlan(plan, 80, nil, nil, nil, 225, 250)
+    local last = p.steps[#p.steps]
+    local by = {}
+    for _, r in ipairs(p.rows) do by[r.id] = r end
+    local full = ns.CraftPlan(plan, 80)
+    -- A goal inside a step: 205-210 Mithril Plate Pants, 5 crafts, to 208 is 3 of them.
+    local mid = ns.CraftPlan(plan, 206, nil, nil, nil, nil, 208)
+    local r = {
+      p.max, last.name, last.to, p.crafts, full.crafts - p.crafts,
+      -- No Arcanite or Thorium below 250, no plans from Magnus or Pexmit.
+      tostring(by[12360] == nil), tostring(by[12359] == nil), tostring(by[8030] == nil), tostring(by[251468] == nil),
+      p.rank.name, mid.steps[1].name, mid.steps[1].to, mid.steps[1].crafts, #mid.steps,
+      tostring(ns.CraftPlan(plan, 250, nil, nil, nil, nil, 250).done), tostring(ns.CraftPlan(plan, 150, nil, nil, nil, 150, 150).rank == nil),
+      ns.CraftGoal(plan, 999), ns.CraftGoal(plan, nil), ns.CraftGoal(plan, 0),
+    }
+    return table.concat(r, "|")
+  `);
+  const [max, name, to, crafts, rest, ...more] = out.split("|");
+  assert.equal(max, "250");
+  assert.equal(name, "Big Black Mace");
+  assert.equal(to, "250");
+  // 250-300 is 10 + 20 + 5 + 4 + 24 = 63 crafts.
+  assert.equal(Number(rest), 63);
+  assert.equal(Number(crafts), 312 - 63);
+  assert.deepEqual(more, ["true", "true", "true", "true", "Artisan", "Mithril Plate Pants", "208", "2", "1", "true", "true", "300", "300", "1"]);
+});
+
+test("the Craft tab goal: type it in the box or /sb craft 250, kept per profession, max goes back to the cap", () => {
+  const out = run(`
+    GetProfessions = function() return 3 end
+    GetProfessionInfo = function() return "Blacksmithing", 136241, 80, 300, 0, 0, 164 end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    SlashCmdList.SNITCHBOT("craft")
+    local k = SnitchbotFrame.k
+    local r = { k.goal.text, k.sub.text }
+    k.goal:SetText("150")
+    k.goal.scripts.OnEnterPressed(k.goal)
+    r[#r + 1] = k.goal.text
+    r[#r + 1] = k.sub.text
+    r[#r + 1] = SnitchbotDB.settings.craftGoal[164]
+    SlashCmdList.SNITCHBOT("craft 250")
+    r[#r + 1] = k.sub.text
+    SlashCmdList.SNITCHBOT("craft max")
+    r[#r + 1] = tostring(SnitchbotDB.settings.craftGoal[164])
+    r[#r + 1] = k.goal.text
+    SlashCmdList.SNITCHBOT("craft 80")
+    r[#r + 1] = k.sub.text
+    return table.concat(r, "~")
+  `, { ui: true });
+  assert.deepEqual(out.split("~"), [
+    "300", "Next: Rough Bronze Leggings x10 (80-90)  ·  312 crafts to 300",
+    "150", "Next: Rough Bronze Leggings x10 (80-90)  ·  90 crafts to 150",
+    "150",
+    "Next: Rough Bronze Leggings x10 (80-90)  ·  249 crafts to 250",
+    "nil", "300",
+    "Goal reached: you're at 80. Raise the goal to go on.",
+  ]);
+});
+
 test("the Craft tab: reads your skill, prices the shopping list, and lists the steps", () => {
   const out = run(`
     GetProfessions = function() return 3, 4 end
@@ -198,7 +263,7 @@ test("the Craft tab: reads your skill, prices the shopping list, and lists the s
   `, { ui: true });
   const [shop, steps] = out.split("#");
   const s = shop.split("~");
-  assert.equal(s[0], "Blacksmithing 80 / 150");
+  assert.equal(s[0], "Blacksmithing 80");
   assert.equal(s[1], "Next: Rough Bronze Leggings x10 (80-90)  ·  312 crafts to 300");
   assert.match(s[2], /Train Expert: your cap is 150\./);
   assert.match(s[3], /^0 of \d+ materials ready$/);

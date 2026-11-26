@@ -44,7 +44,7 @@ The **Stats** tab collects it all:
 
 ## Level a profession
 
-- **Craft:** from your skill now to 300, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Blacksmithing first.
+- **Craft:** from your skill now to 300, or any goal you set, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Blacksmithing first.
 
 ## Auction house prices without pasting
 

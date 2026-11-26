@@ -88,24 +88,31 @@ function ns.CraftPlanFor(skillLine)
   return ns.CRAFT_PLANS[tonumber(skillLine) or -1]
 end
 
---- From `skill` to the plan's cap. Each callback may be nil:
+--- The skill to level to: `goal` kept between 1 and the plan's cap (the cap when nil).
+function ns.CraftGoal(plan, goal)
+  goal = math.floor(tonumber(goal) or plan.max)
+  return math.max(1, math.min(plan.max, goal))
+end
+
+--- From `skill` to `goal` (the plan's cap when nil). Each callback may be nil:
 ---   have(id) -> how many you have (bags and bank)
 ---   price(id) -> copper each at the auction house, or nil
 ---   known(spell) -> true when you already know the recipe
 --- Returns {
----   skill, max, done,
+---   skill, max (the goal), done,
 ---   steps = { { from, to, name, spell, crafts, current, learn } }  (crafts still to do)
 ---   rows = { { id, need, have, missing, price, cost, made, plans, tool } }
 ---   cost (copper for everything missing that has a price), unpriced (rows missing with no price),
 ---   crafts (all crafts left), made (parts to make along the way),
 ---   rank = { name, at, cap } when the next rank must be trained before the cap you have
 --- }
-function ns.CraftPlan(plan, skill, have, price, known, cap)
+function ns.CraftPlan(plan, skill, have, price, known, cap, goal)
   skill = math.max(1, math.floor(tonumber(skill) or 1))
+  goal = ns.CraftGoal(plan, goal)
   have = have or function() return 0 end
   price = price or function() return nil end
   known = known or function() return false end
-  local out = { skill = skill, max = plan.max, done = skill >= plan.max, steps = {}, rows = {}, cost = 0, unpriced = 0, crafts = 0, made = 0 }
+  local out = { skill = skill, max = goal, done = skill >= goal, steps = {}, rows = {}, cost = 0, unpriced = 0, crafts = 0, made = 0 }
   local need, order = {}, {}
   local function want(id, n)
     if n <= 0 then return end
@@ -115,10 +122,12 @@ function ns.CraftPlan(plan, skill, have, price, known, cap)
   local plans, planOrder = {}, {}
   for _, s in ipairs(plan.steps) do
     local from, to, spell, name, crafts, mats, learn = s[1], s[2], s[3], s[4], s[5], s[6], s[7]
-    if skill < to then
+    -- Only the part of the step between your skill and the goal.
+    local lo, hi = math.max(skill, from), math.min(to, goal)
+    if lo < hi then
       local left = crafts
-      if skill > from then left = math.ceil(crafts * (to - skill) / (to - from)) end
-      out.steps[#out.steps + 1] = { from = from, to = to, name = name, spell = spell, crafts = left, current = skill >= from, learn = learn }
+      if lo > from or hi < to then left = math.ceil(crafts * (hi - lo) / (to - from)) end
+      out.steps[#out.steps + 1] = { from = from, to = hi, name = name, spell = spell, crafts = left, current = skill >= from, learn = learn }
       out.crafts = out.crafts + left
       for _, m in ipairs(mats) do want(m[1], math.ceil(m[2] / crafts * left)) end
       if learn and learn.item and not known(spell) and not plans[learn.item] then
@@ -159,7 +168,7 @@ function ns.CraftPlan(plan, skill, have, price, known, cap)
   end
   -- The rank to train: your cap is below the skill the next step needs.
   cap = tonumber(cap)
-  if cap and cap < plan.max then
+  if cap and cap < goal then
     for _, r in ipairs(plan.ranks or {}) do
       if cap <= r[2] then out.rank = { name = r[1], at = r[2], cap = r[3] }; break end
     end

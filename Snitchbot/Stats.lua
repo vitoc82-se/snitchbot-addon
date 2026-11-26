@@ -47,6 +47,35 @@ function ns.ParsePrices(text)
   return { house = ns.Decode(parts[2]), at = tonumber(parts[3]) or 0, prices = prices, count = count }
 end
 
+-- ---- Prices from an auction house scan in the game
+
+--- What one of a stack costs at its buyout, in copper; nil with no buyout.
+function ns.UnitPrice(count, buyout)
+  buyout = tonumber(buyout)
+  if not buyout or buyout <= 0 then return nil end
+  return math.floor(buyout / math.max(1, tonumber(count) or 1))
+end
+
+--- Keeps the lowest price seen per item in `t`.
+function ns.KeepLowest(t, id, price)
+  id, price = tonumber(id), tonumber(price)
+  if id and price and price > 0 and (not t[id] or price < t[id]) then t[id] = price end
+end
+
+--- The price record after a scan. A full scan replaces every price; a search
+--- of some items updates those and keeps the rest.
+--- -> { house, at, prices, count, scan = "full" | "items" }
+function ns.MergePrices(old, found, full, at, house)
+  local prices = {}
+  if not full and type(old) == "table" and type(old.prices) == "table" then
+    for id, p in pairs(old.prices) do prices[id] = p end
+  end
+  for id, p in pairs(found) do prices[id] = p end
+  local count = 0
+  for _ in pairs(prices) do count = count + 1 end
+  return { house = house or (type(old) == "table" and old.house) or "In-game scan", at = at, prices = prices, count = count, scan = full and "full" or "items" }
+end
+
 -- ---- Runs: personal bests, comparisons, who you run with, what bosses drop
 
 local function dungeon(run) return (tostring(run.key or run.name or ""):match("^[^:]*")) end

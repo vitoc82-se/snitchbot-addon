@@ -892,7 +892,9 @@ local function onMoney()
   lastMoney = m
 end
 
+local auctionHook -- the AH scan button, set further down
 local function setOpen(kind, open)
+  if kind == "auction" and auctionHook then auctionHook(open) end
   if open then
     goldCtx.open = kind
   elseif goldCtx.open == kind then
@@ -1508,6 +1510,185 @@ local function makeCraftPane(p)
   k.empty:SetPoint("TOPLEFT", PAD, -50)
   k.empty:SetPoint("RIGHT", -PAD, 0)
   safe(k.empty.SetWordWrap, k.empty, true)
+end
+
+-- ---- Auction house scan: prices from the game itself, no pasting.
+
+-- Forever has the modern auction house (C_AuctionHouse). A full scan
+-- (ReplicateItems) lists every auction at once, once per 15 minutes; when the
+-- client has none, or it's too soon, Snitchbot searches the items on your
+-- Craft and Raid lists one by one. A hidden frame's OnUpdate drives it.
+local FULL_WAIT, ITEM_WAIT, CHUNK, FULL_EVERY = 30, 3, 2000, 15 * 60
+local scan
+local scanFrame, ahButton
+
+local function clock() return tonumber(safe(GetTime)) or now() end
+
+local function scanSay(msg)
+  if ahButton then ahButton.status:SetText(msg) end
+end
+
+-- The items worth a price: the Craft shopping list and the raid list.
+local function scanTargets()
+  local ids, seen = {}, {}
+  local function add(id) if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end end
+  local out = craftPlan()
+  for _, r in ipairs(out and out.rows or {}) do add(r.id) end
+  local list = currentList()
+  for _, it in ipairs(list and list.items or {}) do add(it.id) end
+  return ids
+end
+
+local function finishScan(note)
+  local s = scan
+  if not s then return end
+  scan = nil
+  local n = 0
+  for _ in pairs(s.found) do n = n + 1 end
+  if n > 0 then
+    local realm = safe(GetRealmName)
+    db().prices = ns.MergePrices(db().prices, s.found, s.kind == "full", now(), "In-game scan" .. (realm and (", " .. realm) or ""))
+  end
+  local msg = n > 0 and string.format("Prices saved for %s items.", ns.Num(n)) or "No prices found."
+  if note then msg = note .. " " .. msg end
+  scanSay(msg)
+  say(msg)
+  if ahButton then ahButton.label:SetText("Snitchbot scan") end
+  update()
+end
+
+local function itemScan(note)
+  local ids = scanTargets()
+  if #ids == 0 then
+    scan = nil
+    scanSay("Nothing to search: no Craft or Raid list.")
+    if ahButton then ahButton.label:SetText("Snitchbot scan") end
+    return
+  end
+  scan = { kind = "items", queue = ids, i = 0, found = {}, note = note }
+  scanSay(string.format("Searching %d items...", #ids))
+end
+
+local function startScan()
+  local AH = C_AuctionHouse
+  if scan then return finishScan("Stopped.") end
+  if type(AH) ~= "table" then scanSay("This client has no auction house API."); return end
+  if ahButton then ahButton.label:SetText("Stop") end
+  local last = db().fullScanAt
+  if type(AH.ReplicateItems) == "function" and not (last and now() - last < FULL_EVERY) then
+    db().fullScanAt = now()
+    scan = { kind = "full", sentAt = clock(), found = {} }
+    scanSay("Asking for every auction...")
+    safe(AH.ReplicateItems)
+  elseif type(AH.SendSearchQuery) == "function" then
+    itemScan(type(AH.ReplicateItems) == "function" and "A full scan is allowed once per 15 minutes; searched your lists." or nil)
+  else
+    scanSay("This client can't search the auction house.")
+    if ahButton then ahButton.label:SetText("Snitchbot scan") end
+  end
+end
+
+local function itemKey(id)
+  local AH = C_AuctionHouse
+  return (AH.MakeItemKey and safe(AH.MakeItemKey, id)) or { itemID = id, itemLevel = 0, itemSuffix = 0, battlePetSpeciesID = 0 }
+end
+
+-- A search answered: the cheapest one, per item.
+local function onSearchResult(id, commodity)
+  local s = scan
+  if not s or s.kind ~= "items" or s.waiting ~= id then return end
+  local AH = C_AuctionHouse
+  if commodity then
+    local info = (tonumber(safe(AH.GetNumCommoditySearchResults, id)) or 0) > 0 and safe(AH.GetCommoditySearchResultInfo, id, 1)
+    if type(info) == "table" then ns.KeepLowest(s.found, id, info.unitPrice) end
+  else
+    local key = s.key
+    local info = (tonumber(safe(AH.GetNumItemSearchResults, key)) or 0) > 0 and safe(AH.GetItemSearchResultInfo, key, 1)
+    if type(info) == "table" then ns.KeepLowest(s.found, id, info.buyoutAmount) end
+  end
+  s.waiting = nil
+end
+
+local function scanTick()
+  local s = scan
+  if not s then return end
+  local AH = C_AuctionHouse
+  local t = clock()
+  if s.kind == "full" then
+    if not s.total then
+      if t - s.sentAt > FULL_WAIT then
+        scan = nil
+        return itemScan("The full scan didn't answer; searched your lists instead.")
+      end
+      return
+    end
+    local last = math.min(s.total - 1, s.at + CHUNK - 1)
+    for i = s.at, last do
+      -- 18 values per auction, more than safe() hands back: count 3rd, buyout 10th, item id 17th.
+      local ok, r = pcall(function() return { AH.GetReplicateItemInfo(i) } end)
+      if ok and type(r) == "table" and not (ns.secret(r[3]) or ns.secret(r[10]) or ns.secret(r[17])) then
+        ns.KeepLowest(s.found, r[17], ns.UnitPrice(r[3], r[10]))
+      end
+    end
+    s.at = last + 1
+    scanSay(string.format("Reading %s auctions: %d%%", ns.Num(s.total), math.floor(s.at / math.max(1, s.total) * 100)))
+    if s.at >= s.total then finishScan() end
+    return
+  end
+  -- One search at a time: wait for its answer, or give up on it after a moment.
+  if s.waiting then
+    if t - s.sentAt <= ITEM_WAIT then return end
+    s.waiting = nil
+  end
+  if s.i >= #s.queue then return finishScan(s.note) end
+  if AH.IsThrottledMessageSystemReady and safe(AH.IsThrottledMessageSystemReady) == false then return end
+  s.i = s.i + 1
+  local id = s.queue[s.i]
+  s.waiting, s.sentAt, s.key = id, t, itemKey(id)
+  local sorts = { { sortOrder = Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price or 0, reverseSort = false } }
+  safe(AH.SendSearchQuery, s.key, sorts, false)
+  scanSay(string.format("Searching %d of %d items...", s.i, #s.queue))
+end
+
+local function onReplicate()
+  local s = scan
+  if not s or s.kind ~= "full" or s.total then return end
+  local n = tonumber(safe(C_AuctionHouse.GetNumReplicateItems)) or 0
+  if n == 0 then
+    scan = nil
+    return itemScan("The full scan came back empty; searched your lists instead.")
+  end
+  s.total, s.at = n, 0
+end
+
+-- The button sits just above the auction house window.
+local function showAHButton()
+  local parent = AuctionHouseFrame or AuctionFrame
+  if not parent then return end
+  if not ahButton then
+    ahButton = button(parent, "Snitchbot scan", true, 120)
+    ahButton:SetPoint("BOTTOMRIGHT", parent, "TOPRIGHT", -4, 4)
+    ahButton:SetScript("OnClick", startScan)
+    ahButton.status = text(ahButton, 12, "medium", C.text)
+    ahButton.status:SetPoint("RIGHT", ahButton, "LEFT", -10, 0)
+    ahButton.status:SetJustifyH("RIGHT")
+    local p = db().prices
+    if type(p) == "table" and p.at then ahButton.status:SetText(string.format("Prices from %s", safe(date, "%b %d, %H:%M", p.at) or "earlier")) end
+  end
+  ahButton:Show()
+end
+
+auctionHook = function(open)
+  if open then
+    if not scanFrame then
+      scanFrame = CreateFrame("Frame")
+      scanFrame:SetScript("OnUpdate", scanTick)
+    end
+    -- The window loads with the AH: a moment later it's there.
+    if C_Timer and C_Timer.After then C_Timer.After(0.2, showAHButton) else showAHButton() end
+  elseif scan then
+    finishScan("The auction house closed.")
+  end
 end
 
 local function makeTabs()
@@ -2139,6 +2320,13 @@ local function onEvent(_, event, ...)
   elseif event == "CHAT_MSG_COMBAT_FACTION_CHANGE" then
     local faction, n = ns.ParseRep((...), FACTION_STANDING_INCREASED, FACTION_STANDING_DECREASED)
     tally("rep", faction, n)
+  elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
+    onReplicate()
+  elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
+    onSearchResult(tonumber((...)), true)
+  elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
+    local key = ...
+    onSearchResult(type(key) == "table" and tonumber(key.itemID) or nil, false)
   elseif OPENS[event] then
     setOpen(OPENS[event], true)
   elseif CLOSES[event] then
@@ -2172,7 +2360,8 @@ for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "
   "TRAINER_SHOW", "TRAINER_CLOSED", "TAXIMAP_OPENED", "TAXIMAP_CLOSED", "TRADE_SHOW", "TRADE_CLOSED",
   "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_LOGOUT",
   "UNIT_HEALTH", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
-  "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL", "LEARNED_SPELL_IN_TAB" }) do
+  "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL", "LEARNED_SPELL_IN_TAB",
+  "REPLICATE_ITEM_LIST_UPDATE", "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED" }) do
   pcall(events.RegisterEvent, events, e)
 end
 
@@ -2192,6 +2381,12 @@ SlashCmdList.SNITCHBOT = function(msg)
     buffCheck()
   elseif cmd == "export" then
     exportCode()
+  elseif cmd == "scan" then
+    if ahButton and ahButton:IsShown() and (safe(AuctionHouseFrame and AuctionHouseFrame.IsShown, AuctionHouseFrame) or safe(AuctionFrame and AuctionFrame.IsShown, AuctionFrame)) then
+      startScan()
+    else
+      say("Open the auction house first, then /sb scan or the Snitchbot scan button.")
+    end
   elseif cmd == "end" then
     if db().run then
       endRunNow()

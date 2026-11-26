@@ -46,6 +46,10 @@ The **Stats** tab collects it all:
 
 - **Craft:** from your skill now to 300, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Blacksmithing first.
 
+## Auction house prices without pasting
+
+- **Snitchbot scan:** a button on the auction house window reads prices for you: every auction in one go when the game allows it, or just the items on your lists.
+
 ## Your stats on the web
 
 Press **Copy for snitchbot.app** and paste it on [myself.snitchbot.app](https://myself.snitchbot.app). Your character's page then shows your runs, personal bests, time per level and where your gold came from. Only you can see it.

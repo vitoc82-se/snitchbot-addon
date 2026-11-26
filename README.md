@@ -11,9 +11,11 @@ One window with six tabs. Open it with the minimap button (or `/sb`); it stays o
 - **Stats**: time played per level and when you'll reach the next milestone, where this session's XP and gold came from, reputation, personal bests per dungeon, who you run with most, and what each boss dropped. **Copy for snitchbot.app** puts it all on your character's page on [myself.snitchbot.app](https://myself.snitchbot.app), for you only.
 - **Settings**: start the combat log in dungeons, open on entering a dungeon, tell your group, the minimap button, **Paste AH prices** (from **Copy prices for the addon** on auction.snitchbot.app) and **Probe the game**.
 
+**Snitchbot scan**, a button above the auction house window (or `/sb scan` there), reads prices in the game: a full scan of every auction when the client allows it (once per 15 minutes), else a search of each item on your Craft and Raid lists. It keeps the lowest buyout per item; no pasting needed.
+
 Snitchbot also warns you when your gear is low on durability as a dungeon starts.
 
-Slash commands, all optional: `/sb` (open or close), `/sb craft`, `/sb xp`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb end`, `/sb paste`, `/sb probe`.
+Slash commands, all optional: `/sb` (open or close), `/sb craft`, `/sb scan`, `/sb xp`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb end`, `/sb paste`, `/sb probe`.
 
 ## Development
 

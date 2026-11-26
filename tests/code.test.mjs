@@ -207,6 +207,91 @@ test("the Craft tab: reads your skill, prices the shopping list, and lists the s
   assert.deepEqual(steps.split("~"), ["80-90  Rough Bronze Leggings", "x10", "Skill 80 of 300", "Shopping"]);
 });
 
+// A fake auction house: AUCTIONS rows are { id, count, buyout }.
+const FAKE_AH = `
+  AUCTIONS = {}
+  SENT = {}
+  CAN_REPLICATE = true
+  GetTime = function() return CLOCK end
+  CLOCK = 100
+  AuctionHouseFrame = CreateFrame("Frame", "AuctionHouseFrame")
+  AuctionHouseFrame.IsShown = function() return true end
+  C_AuctionHouse = {
+    ReplicateItems = function() REPLICATED = true end,
+    GetNumReplicateItems = function() return #AUCTIONS end,
+    GetReplicateItemInfo = function(i)
+      local a = AUCTIONS[i + 1]
+      return "x", 1, a[2], 1, true, 1, 0, 0, 0, a[3], 0, false, nil, "Seller", nil, 0, a[1], true
+    end,
+    MakeItemKey = function(id) return { itemID = id, itemLevel = 0, itemSuffix = 0, battlePetSpeciesID = 0 } end,
+    SendSearchQuery = function(key) SENT[#SENT + 1] = key.itemID end,
+    IsThrottledMessageSystemReady = function() return true end,
+    GetNumCommoditySearchResults = function(id) local n = 0; for _, a in ipairs(AUCTIONS) do if a[1] == id then n = n + 1 end end; return n end,
+    GetCommoditySearchResultInfo = function(id, i)
+      local best
+      for _, a in ipairs(AUCTIONS) do if a[1] == id and (not best or a[3] / a[2] < best) then best = a[3] / a[2] end end
+      return { itemID = id, unitPrice = best and math.floor(best) }
+    end,
+  }
+  local e = SnitchbotEvents
+  e.scripts.OnEvent(e, "PLAYER_LOGIN")
+  GetProfessions = function() return 3 end
+  GetProfessionInfo = function() return "Blacksmithing", 1, 290, 300, 0, 0, 164 end
+  SnitchbotDB.prices = { house = "EU-NORMAL-ALLIANCE", at = 1, count = 2, prices = { [12359] = 9999, [123] = 50 } }
+  e.scripts.OnEvent(e, "AUCTION_HOUSE_SHOW")
+  BUTTON = AuctionHouseFrame
+  -- The scan's ticker: the last frame made with an OnUpdate (the window's comes first).
+  for _, f in ipairs(FRAMES) do if f.scripts.OnUpdate and f ~= SnitchbotFrame then TICKER = f end end
+  function tick(n) for _ = 1, n or 1 do CLOCK = CLOCK + 0.1; TICKER.scripts.OnUpdate(TICKER, 0.1) end end
+`;
+
+test("AH scan: one full scan keeps the lowest price per item and replaces the pasted prices", () => {
+  const out = run(`
+    ${FAKE_AH}
+    AUCTIONS = { { 12359, 20, 40000 }, { 12359, 5, 12500 }, { 3860, 1, 1500 }, { 3860, 10, 0 } }
+    SlashCmdList.SNITCHBOT("scan")
+    local asked = tostring(REPLICATED)
+    e = SnitchbotEvents
+    e.scripts.OnEvent(e, "REPLICATE_ITEM_LIST_UPDATE")
+    tick(3)
+    local p = SnitchbotDB.prices
+    -- A second scan within 15 minutes searches the lists instead.
+    SlashCmdList.SNITCHBOT("scan")
+    local second = SnitchbotDB.prices.scan
+    return table.concat({ asked, p.prices[12359], p.prices[3860], tostring(p.prices[123]), p.count, p.scan, p.house, tostring(second) }, "|")
+  `, { ui: true });
+  assert.equal(out, "true|2000|1500|nil|2|full|In-game scan|full");
+});
+
+test("AH scan: without a full scan it searches the Craft list items one at a time and keeps other prices", () => {
+  const out = run(`
+    ${FAKE_AH}
+    C_AuctionHouse.ReplicateItems = nil
+    AUCTIONS = { { 12359, 20, 40000 }, { 7082, 1, 30000 } }
+    SlashCmdList.SNITCHBOT("scan")
+    -- Answer each search as the game would; one item gets no answer and times out.
+    for _ = 1, 40 do
+      local id = SENT[#SENT]
+      if id and id ~= LAST then
+        LAST = id
+        if id ~= 8170 then e = SnitchbotEvents; e.scripts.OnEvent(e, "COMMODITY_SEARCH_RESULTS_UPDATED", id) end
+      end
+      tick(1)
+      if id == 8170 then tick(40) end
+    end
+    local p = SnitchbotDB.prices
+    return table.concat({ #SENT, p.prices[12359], p.prices[7082], p.prices[123], p.scan, tostring(p.prices[8170]), SAID[#SAID] }, "~")
+  `, { ui: true });
+  const [sent, thorium, air, kept, kind, rugged, said] = out.split("~");
+  assert.ok(Number(sent) >= 5, `searched ${sent} items`);
+  assert.equal(thorium, "2000");
+  assert.equal(air, "30000");
+  assert.equal(kept, "50");
+  assert.equal(kind, "items");
+  assert.equal(rugged, "nil");
+  assert.match(said, /Prices saved for 2 items\./);
+});
+
 test("shift-click puts the item link in chat with Forever's C_Item", () => {
   const out = run(`
     SnitchbotDB = { lists = { ["Vitoc War"] = ns.ParseShop("${CODE}") } }

@@ -486,12 +486,21 @@ function ns.RollPatterns(g)
   add("need", "LOOT_ROLL_ROLLED_NEED", "Need Roll - %d for %s by %s")
   add("greed", "LOOT_ROLL_ROLLED_GREED", "Greed Roll - %d for %s by %s")
   add("de", "LOOT_ROLL_ROLLED_DE", "Disenchant Roll - %d for %s by %s")
+  -- With the loot lines kept short (the game's default) only the winner's
+  -- line comes, with the roll in it: "[Loot]: You (Need - 87) Won: [item]".
+  local function mine(kind, key, fallback)
+    local f = type(g[key]) == "string" and g[key] ~= "" and g[key] or fallback
+    list[#list + 1] = { kind = kind, pattern = rollPattern(f), self = true, won = true }
+  end
+  mine("need", "LOOT_ROLL_YOU_WON_NO_SPAM_NEED", "|HlootHistory:%d|h[Loot]|h: You (Need - %d) Won: %s")
+  mine("greed", "LOOT_ROLL_YOU_WON_NO_SPAM_GREED", "|HlootHistory:%d|h[Loot]|h: You (Greed - %d) Won: %s")
+  mine("de", "LOOT_ROLL_YOU_WON_NO_SPAM_DE", "|HlootHistory:%d|h[Loot]|h: You (Disenchant - %d) Won: %s")
   add("won", "LOOT_ROLL_YOU_WON", "You won: %s")
   return list
 end
 
---- A loot chat line -> { kind, roll, who, id, name } for a roll, { kind = "won", id, name }
---- for an item you won, or nil.
+--- A loot chat line -> { kind, roll, who, id, name, self, won } for a roll (self and won
+--- for your own winning line), { kind = "won", id, name } for an item you won, or nil.
 function ns.ParseRoll(msg, patterns)
   msg = tostring(msg or "")
   for _, p in ipairs(patterns) do
@@ -506,7 +515,9 @@ function ns.ParseRoll(msg, patterns)
       end
       local id, name = ns.ParseLoot(link)
       if id and p.kind == "won" then return { kind = "won", id = id, name = name } end
-      if id and roll and roll >= 1 and roll <= 100 then return { kind = p.kind, roll = roll, who = who, id = id, name = name } end
+      if id and roll and roll >= 1 and roll <= 100 then
+        return { kind = p.kind, roll = roll, who = who, id = id, name = name, self = p.self, won = p.won }
+      end
     end
   end
   return nil
@@ -534,6 +545,37 @@ function ns.WonRoll(book, id, at)
       return r.kind
     end
   end
+  return nil
+end
+
+--- One of your rolls, from whichever source saw it: the chat line, the
+--- winner's line or the loot history. The same roll seen twice (same item,
+--- kind and number within 10 minutes) counts once; a win marks it.
+function ns.NoteRoll(book, kind, roll, id, name, at, won)
+  for _, r in ipairs(type(book.recent) == "table" and book.recent or {}) do
+    if r.id == id and r.kind == kind and r.roll == roll and math.abs((at or 0) - (r.at or 0)) <= 600 then
+      if won and not r.won then
+        r.won = true
+        if book[kind] then book[kind].won = (book[kind].won or 0) + 1 end
+      end
+      return false
+    end
+  end
+  ns.AddRoll(book, kind, roll, id, name, at)
+  if won then
+    book.recent[1].won = true
+    book[kind].won = (book[kind].won or 0) + 1
+  end
+  return true
+end
+
+--- The kind of roll the loot history gives: the modern state
+--- (Enum.EncounterLootDropRollState: 0, 1 need, 3 greed) or the classic type (1 need, 2 greed, 3 disenchant).
+function ns.HistoryKind(state, classic)
+  state = tonumber(state)
+  if classic then return ({ "need", "greed", "de" })[state or 0] end
+  if state == 0 or state == 1 then return "need" end
+  if state == 3 then return "greed" end
   return nil
 end
 

@@ -920,20 +920,69 @@ end
 
 -- Your Need, Greed and Disenchant rolls, and the items you won with them.
 local ROLLS = ns.RollPatterns(_G)
-local function onRoll(msg)
-  local r = ns.ParseRoll(msg, ROLLS)
-  if not r then return end
+local function noteRoll(kind, roll, id, name, won)
   local t = now()
+  ns.NoteRoll(rollBook(), kind, roll, id, name, t, won)
+  ns.NoteRoll(today().rolls, kind, roll, id, name, t, won)
+  update()
+end
+
+-- The last few roll lines and loot history reads, kept to see what the game sends.
+local function rollTrace(what)
+  local d = db()
+  d.rollTrace = type(d.rollTrace) == "table" and d.rollTrace or {}
+  table.insert(d.rollTrace, 1, (safe(date, "%H:%M:%S", now()) or "") .. " " .. tostring(what):gsub("|", "!"))
+  while #d.rollTrace > 12 do table.remove(d.rollTrace) end
+end
+
+local function onRoll(msg)
+  msg = tostring(msg or "")
+  local r = ns.ParseRoll(msg, ROLLS)
+  if msg:find("lootHistory", 1, true) or msg:find("Roll", 1, true) then rollTrace((r and (r.kind .. " ") or "? ") .. msg) end
+  if not r then return end
   if r.kind == "won" then
-    ns.WonRoll(rollBook(), r.id, t)
-    ns.WonRoll(today().rolls, r.id, t)
+    ns.WonRoll(rollBook(), r.id, now())
+    ns.WonRoll(today().rolls, r.id, now())
     return update()
   end
   local who = ns.ShortName(r.who or "")
-  if who ~= me() and r.who ~= (YOU or "You") then return end
-  ns.AddRoll(rollBook(), r.kind, r.roll, r.id, r.name, t)
-  ns.AddRoll(today().rolls, r.kind, r.roll, r.id, r.name, t)
-  update()
+  if not r.self and who ~= me() and r.who ~= (YOU or "You") then return end
+  noteRoll(r.kind, r.roll, r.id, r.name, r.won)
+end
+
+-- The loot history: every roll, your losing ones too (chat only shows the winner).
+local function plain(v) if ns.secret and ns.secret(v) then return nil end return v end
+local function readDrop(encounterID, lootListID)
+  local get = C_LootHistory and C_LootHistory.GetSortedInfoForDrop
+  local info = type(get) == "function" and safe(get, encounterID, lootListID)
+  if type(info) ~= "table" or type(info.rollInfos) ~= "table" then return end
+  local id, name = ns.ParseLoot(plain(info.itemHyperlink))
+  if not id then return end
+  for _, r in ipairs(info.rollInfos) do
+    if type(r) == "table" and (plain(r.isSelf) == true or ns.ShortName(plain(r.playerName) or "") == me()) then
+      local roll, kind = tonumber(plain(r.roll)), ns.HistoryKind(plain(r.state))
+      rollTrace(string.format("drop %s %s %s %s", tostring(id), tostring(kind), tostring(roll), tostring(plain(r.isWinner))))
+      if roll and kind then noteRoll(kind, roll, id, name, plain(r.isWinner) == true) end
+    end
+  end
+end
+local function readHistoryItem(index)
+  local H = C_LootHistory
+  if not (H and type(H.GetItem) == "function" and type(H.GetPlayerInfo) == "function") then return end
+  local _, link, players = safe(H.GetItem, index)
+  local id, name = ns.ParseLoot(link)
+  if not id then return end
+  for j = 1, math.min(tonumber(players) or 0, 40) do
+    local _, _, rollType, roll, isWinner, isMe = safe(H.GetPlayerInfo, index, j)
+    local kind = ns.HistoryKind(rollType, true)
+    if isMe and kind and tonumber(roll) then noteRoll(kind, tonumber(roll), id, name, isWinner == true) end
+  end
+end
+local function readHistory()
+  local H = C_LootHistory
+  if H and type(H.GetNumItems) == "function" then
+    for i = 1, math.min(tonumber(safe(H.GetNumItems)) or 0, 30) do readHistoryItem(i) end
+  end
 end
 
 -- 0.1.5 saved every Need, Greed and roll line as an item called "Loot".
@@ -2565,6 +2614,12 @@ local function onEvent(_, event, ...)
     local msg, who, _, _, who2 = ...
     onLoot(msg, (who and who ~= "") and who or who2)
     onRoll(msg)
+  elseif event == "LOOT_HISTORY_UPDATE_DROP" then
+    readDrop(...)
+  elseif event == "LOOT_HISTORY_ROLL_CHANGED" then
+    readHistoryItem((...))
+  elseif event == "LOOT_HISTORY_ROLL_COMPLETE" or event == "LOOT_HISTORY_FULL_UPDATE" then
+    readHistory()
   elseif event == "CHAT_MSG_SYSTEM" then
     local run, msg = db().run, tostring((...) or "")
     local reset = ns.KillPattern(INSTANCE_RESET_SUCCESS or "%s has been reset.")
@@ -2633,7 +2688,8 @@ for _, e in ipairs({ "PLAYER_LOGIN", "BAG_UPDATE_DELAYED", "BANKFRAME_OPENED", "
   "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_LOGOUT",
   "UNIT_HEALTH", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
   "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL", "LEARNED_SPELL_IN_TAB",
-  "REPLICATE_ITEM_LIST_UPDATE", "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED" }) do
+  "REPLICATE_ITEM_LIST_UPDATE", "COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED",
+  "LOOT_HISTORY_UPDATE_DROP", "LOOT_HISTORY_ROLL_CHANGED", "LOOT_HISTORY_ROLL_COMPLETE", "LOOT_HISTORY_FULL_UPDATE" }) do
   pcall(events.RegisterEvent, events, e)
 end
 

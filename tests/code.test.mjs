@@ -310,6 +310,50 @@ test("at max level the XP tab is Today: gold, loot, runs and your rolls; Stats d
   assert.equal(r[9], "Greed: average 30.0=1 roll  ·  won 0");
 });
 
+test("rolls you lose come from the loot history, the winner's line counts once, and a classic history works too", () => {
+  const out = run(`
+    CLOCK = 100000
+    time = function() return CLOCK end
+    UnitLevel = function() return 60 end
+    UnitXPMax = function() return 0 end
+    UnitName = function() return "Vitoc" end
+    local e = SnitchbotEvents
+    local function go(event, ...) e.scripts.OnEvent(e, event, ...) end
+    go("PLAYER_LOGIN")
+    local arm = "|cnIQ3:|Hitem:9459::::::::34:1491::1::1:28:5242:::::|h[Thermaplugg's Left Arm]|h|r"
+    local axe = "|cnIQ3:|Hitem:274598::::::::37:1491::1::1:28:4522:::::|h[Bloodslash Axe]|h|r"
+    DROPS = {
+      ["1:1"] = { itemHyperlink = axe, rollInfos = { { playerName = "Kesh", roll = 91, state = 0, isWinner = true }, { playerName = "Vitoc", roll = 16, state = 0, isSelf = true } } },
+      ["1:2"] = { itemHyperlink = arm, rollInfos = { { playerName = "Vitoc", roll = 77, state = 3, isSelf = true, isWinner = true } } },
+    }
+    C_LootHistory = { GetSortedInfoForDrop = function(a, b) return DROPS[a .. ":" .. b] end }
+    go("LOOT_HISTORY_UPDATE_DROP", 1, 1)
+    go("LOOT_HISTORY_UPDATE_DROP", 1, 1) -- the same drop again: no second roll
+    go("LOOT_HISTORY_UPDATE_DROP", 1, 2)
+    CLOCK = CLOCK + 5
+    go("CHAT_MSG_LOOT", "|HlootHistory:4|h[Loot]|h: You (Greed - 77) Won: " .. arm)
+    local book = SnitchbotDB.chars.Vitoc.rolls
+    local r = { book.need.n, book.need.sum, book.need.won, book.greed.n, book.greed.won, #book.recent }
+    -- A winner's line with no history behind it counts by itself.
+    go("CHAT_MSG_LOOT", "|HlootHistory:5|h[Loot]|h: You (Need - 64) Won: " .. axe)
+    r[#r + 1] = book.need.n .. "/" .. book.need.won
+    -- Someone else's winning line is not yours.
+    go("CHAT_MSG_LOOT", "|HlootHistory:6|h[Loot]|h: Kesh (Need - 99) Won: " .. axe)
+    r[#r + 1] = book.need.n
+    -- The classic loot history: GetItem and GetPlayerInfo.
+    C_LootHistory = {
+      GetItem = function(i) return 7, axe, 2, true, 1 end,
+      GetPlayerInfo = function(i, j) if j == 1 then return "Kesh", "ROGUE", 2, 40, true, false end return "Vitoc", "WARRIOR", 2, 33, false, true end,
+      GetNumItems = function() return 1 end,
+    }
+    go("LOOT_HISTORY_FULL_UPDATE")
+    r[#r + 1] = book.greed.n .. "/" .. book.greed.sum
+    r[#r + 1] = tostring(#SnitchbotDB.rollTrace > 0)
+    return table.concat(r, "~")
+  `, { ui: true });
+  assert.deepEqual(out.split("~"), ["1", "16", "0", "1", "1", "2", "2/1", "2", "2/110", "true"]);
+});
+
 test("the window resizes from its corner: the size is kept, held to its bounds, and a double-click resets it", () => {
   const out = run(`
     local e = SnitchbotEvents

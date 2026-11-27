@@ -81,7 +81,43 @@ ns.CRAFT_PLANS = {
         { item = 251468, npc = PEXMIT.npc, zone = PEXMIT.zone } },
     },
   },
+
+  -- Cooking 1-300 for WoW Forever, from Wowhead's "Tried & Tested in Forever"
+  -- guide (version 2, updated 2026-11-03):
+  -- https://www.wowhead.com/forever/profession-leveling-guides/cooking
+  -- A recipe sold on both sides has its Horde vendor in `horde`.
+  [185] = {
+    name = "Cooking",
+    max = 300,
+    source = "Wowhead: Tried & Tested in Forever",
+    icon = "Interface\\Icons\\INV_Misc_Food_15",
+    learnWord = "Recipe",
+    ranks = {
+      { "Journeyman", 75, 150 },
+      { "Expert", 150, 225, how = "Expert: buy The Expert Cookbook from Shandrina (Ashenvale) or Wulan (Desolace). Needs skill 125." },
+      { "Artisan", 225, 300, how = "Artisan: the quest Clamlette Surprise from Dirge Quikcleave in Gadgetzan, Tanaris. Needs level 35." },
+    },
+    steps = {
+      { 1, 50, 7751, "Brilliant Smallfish", 49, { { 6291, 49 } } },
+      { 50, 100, 7753, "Longjaw Mud Snapper", 51, { { 6289, 51 } },
+        { item = 6328, npc = "Tharynn Bouden", zone = "Elwynn Forest", horde = { npc = "Naal Mistrunner", zone = "Thunder Bluff" } } },
+      { 100, 175, 7755, "Bristle Whisker Catfish", 120, { { 6308, 120 } },
+        { item = 6330, npc = "Kilxx", zone = "The Barrens" } },
+      { 175, 225, 20916, "Mithril Headed Trout", 51, { { 8365, 51 } },
+        { item = 17062, npc = "Kelsey Yance", zone = "Stranglethorn Vale" } },
+      { 225, 275, 18238, "Spotted Yellowtail", 51, { { 4603, 51 } },
+        { item = 13939, npc = "Gikkix", zone = "Tanaris" } },
+      { 275, 300, 18246, "Mightfish Steak", 25, { { 13893, 25 }, { 2692, 25 }, { 3713, 25 } },
+        { item = 13948, npc = "Vivianna", zone = "Feralas", horde = { npc = "Sheendra Tallgrass", zone = "Feralas" } } },
+    },
+  },
 }
+
+--- Who sells a recipe or plans to your faction: { npc, zone }.
+function ns.CraftVendor(learn, faction)
+  if faction == "Horde" and learn.horde then return learn.horde end
+  return learn
+end
 
 --- The plan for a profession skill line, or nil.
 function ns.CraftPlanFor(skillLine)
@@ -104,7 +140,7 @@ end
 ---   rows = { { id, need, have, missing, price, cost, made, plans, tool } }
 ---   cost (copper for everything missing that has a price), unpriced (rows missing with no price),
 ---   crafts (all crafts left), made (parts to make along the way),
----   rank = { name, at, cap } when the next rank must be trained before the cap you have
+---   rank = { name, at, cap, how } when the next rank must be trained before the cap you have
 --- }
 function ns.CraftPlan(plan, skill, have, price, known, cap, goal)
   skill = math.max(1, math.floor(tonumber(skill) or 1))
@@ -170,7 +206,7 @@ function ns.CraftPlan(plan, skill, have, price, known, cap, goal)
   cap = tonumber(cap)
   if cap and cap < goal then
     for _, r in ipairs(plan.ranks or {}) do
-      if cap <= r[2] then out.rank = { name = r[1], at = r[2], cap = r[3] }; break end
+      if cap <= r[2] then out.rank = { name = r[1], at = r[2], cap = r[3], how = r.how }; break end
     end
   end
   return out

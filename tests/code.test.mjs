@@ -454,6 +454,71 @@ test("the Craft tab: reads your skill, prices the shopping list, and lists the s
   assert.deepEqual(steps.split("~"), ["80-90  Rough Bronze Leggings", "x10", "Skill 80 of 300", "Shopping"]);
 });
 
+test("cooking plan: Wowhead's six steps, the Horde vendor, and the book and quest ranks", () => {
+  const out = run(`
+    local plan = ns.CraftPlanFor(185)
+    local fresh = ns.CraftPlan(plan, 1)
+    local mid = ns.CraftPlan(plan, 140, nil, nil, nil, 150)
+    local late = ns.CraftPlan(plan, 210, nil, nil, nil, 225)
+    local snapper = plan.steps[2][7]
+    return table.concat({ plan.name, fresh.crafts, #fresh.steps, tostring(fresh.rows[1].tool),
+      mid.steps[1].name, mid.steps[1].crafts, mid.rank.name, mid.rank.how,
+      late.rank.name, late.rank.how,
+      ns.CraftVendor(snapper, "Horde").npc, ns.CraftVendor(snapper, "Alliance").npc, ns.CraftVendor(plan.steps[3][7], "Horde").npc }, "~")
+  `);
+  assert.deepEqual(out.split("~"), [
+    "Cooking", "347", "6", "nil",
+    // 140 to 175 is 35 of the catfish step's 75 points: 56 of 120 crafts.
+    "Bristle Whisker Catfish", "56", "Expert",
+    "Expert: buy The Expert Cookbook from Shandrina (Ashenvale) or Wulan (Desolace). Needs skill 125.",
+    "Artisan", "Artisan: the quest Clamlette Surprise from Dirge Quikcleave in Gadgetzan, Tanaris. Needs level 35.",
+    "Naal Mistrunner", "Tharynn Bouden", "Kilxx",
+  ]);
+});
+
+test("the Craft tab with two plans: click the name or /sb craft cooking to switch, each keeps its own goal", () => {
+  const out = run(`
+    GetProfessions = function() return 3, nil, nil, 9, 10 end
+    GetProfessionInfo = function(i)
+      if i == 3 then return "Blacksmithing", 136241, 80, 150, 0, 0, 164 end
+      if i == 9 then return "Fishing", 136245, 90, 150, 0, 0, 356 end
+      return "Cooking", 133971, 140, 150, 0, 0, 185
+    end
+    UnitFactionGroup = function() return "Horde" end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    SlashCmdList.SNITCHBOT("craft")
+    local k = SnitchbotFrame.k
+    local r = { k.who.text, tostring(k.pick.shown) }
+    k.pick.scripts.OnClick()
+    r[#r + 1] = k.who.text
+    r[#r + 1] = k.status.text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    k.view.scripts.OnClick()
+    r[#r + 1] = k.rows[1].name.text
+    r[#r + 1] = k.rows[1].tip[3]
+    SlashCmdList.SNITCHBOT("craft 160")
+    r[#r + 1] = k.sub.text
+    SlashCmdList.SNITCHBOT("craft black")
+    r[#r + 1] = k.who.text
+    r[#r + 1] = k.goal.text
+    k.pick.scripts.OnClick()
+    r[#r + 1] = k.goal.text
+    SlashCmdList.SNITCHBOT("craft tailoring")
+    r[#r + 1] = k.who.text
+    return table.concat(r, "#")
+  `, { ui: true });
+  assert.deepEqual(out.split("#"), [
+    "Blacksmithing 80", "true",
+    "Cooking 140",
+    "Expert: buy The Expert Cookbook from Shandrina (Ashenvale) or Wulan (Desolace). Needs skill 125. Your cap is 150.",
+    "100-175  Bristle Whisker Catfish",
+    "Recipe from Kilxx, The Barrens.",
+    "Next: Bristle Whisker Catfish x32 (100-160)  ·  32 crafts to 160",
+    "Blacksmithing 80", "300", "160",
+    "Cooking 140",
+  ]);
+});
+
 // A fake auction house: AUCTIONS rows are { id, count, buyout }.
 const FAKE_AH = `
   AUCTIONS = {}

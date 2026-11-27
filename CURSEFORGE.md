@@ -47,7 +47,7 @@ At max level the XP tab becomes **Today**: gold and gold per hour, loot value, k
 
 ## Level a profession
 
-- **Craft:** from your skill now to 300, or any goal you set, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Blacksmithing first.
+- **Craft:** from your skill now to 300, or any goal you set, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. **Blacksmithing** and **Cooking** so far; with both, click the profession name to switch.
 
 ## Auction house prices without pasting
 

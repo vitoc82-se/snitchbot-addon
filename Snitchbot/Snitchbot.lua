@@ -1561,17 +1561,47 @@ local function professions()
   return out
 end
 
+-- Your professions that have a plan.
+local function craftProfessions()
+  local out = {}
+  for _, p in ipairs(professions()) do
+    if ns.CraftPlanFor(p.line) then out[#out + 1] = p end
+  end
+  return out
+end
+
 -- The profession with a plan to show: the one you picked, else the first with a plan.
 local function craftProfession()
-  local list, pick = professions(), settings().craftLine
-  local first
+  local list, pick = craftProfessions(), settings().craftLine
   for _, p in ipairs(list) do
-    if ns.CraftPlanFor(p.line) then
-      if p.line == pick then return p end
-      first = first or p
+    if p.line == pick then return p end
+  end
+  return list[1]
+end
+
+-- Show the next profession with a plan; with `name`, the one with that name.
+local function switchCraft(name)
+  local list, cur = craftProfessions(), craftProfession()
+  if name then
+    name = name:lower()
+    for _, p in ipairs(list) do
+      if p.name:lower():sub(1, #name) == name then settings().craftLine = p.line; return p end
+    end
+    return nil
+  end
+  for i, p in ipairs(list) do
+    if cur and p.line == cur.line then
+      local nxt = list[i % #list + 1]
+      settings().craftLine = nxt.line
+      return nxt
     end
   end
-  return first
+  return cur
+end
+
+-- Who sells recipes or plans to you.
+local function vendorOf(learn)
+  return ns.CraftVendor(learn, safe(UnitFactionGroup, "player"))
 end
 
 -- The skill you want to reach in a profession: nil for the plan's cap.
@@ -1590,8 +1620,8 @@ local function setCraftGoal(line, n)
   return ns.CraftGoal(plan, s.craftGoal[line])
 end
 
-local function craftPlan()
-  local p = craftProfession()
+local function craftPlan(p)
+  p = p or craftProfession()
   if not p then return nil end
   local prices = db().prices
   prices = type(prices) == "table" and type(prices.prices) == "table" and prices.prices or {}
@@ -1611,6 +1641,32 @@ local function makeCraftPane(p)
   k.who = text(p, 16, "semibold", C.text)
   k.who:SetPoint("TOPLEFT", PAD, -14)
   k.who:SetPoint("RIGHT", -PAD - 160, 0)
+  -- With more than one plan, the profession name switches to the next one.
+  k.pick = CreateFrame("Button", nil, p)
+  k.pick:SetPoint("TOPLEFT", PAD - 4, -10)
+  k.pick:SetPoint("RIGHT", -PAD - 160, 0)
+  k.pick:SetHeight(26)
+  k.arrow = k.pick:CreateTexture(nil, "OVERLAY")
+  k.arrow:SetTexture("Interface\\ChatFrame\\ChatFrameExpandArrow")
+  k.arrow:SetSize(14, 14)
+  k.arrow:SetVertexColor(C.muted[1], C.muted[2], C.muted[3])
+  k.pick:SetScript("OnClick", function() switchCraft(); update() end)
+  k.pick:SetScript("OnEnter", function()
+    k.who:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+    if not GameTooltip then return end
+    local names, cur = {}, craftProfession()
+    for _, q in ipairs(craftProfessions()) do
+      if not cur or q.line ~= cur.line then names[#names + 1] = string.format("%s %d", q.name, q.rank) end
+    end
+    GameTooltip:SetOwner(k.pick, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine("Switch profession")
+    GameTooltip:AddLine("Click to show " .. table.concat(names, ", ") .. ".", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  k.pick:SetScript("OnLeave", function()
+    k.who:SetTextColor(C.text[1], C.text[2], C.text[3])
+    if GameTooltip then GameTooltip:Hide() end
+  end)
   k.sub = text(p, 12, "regular", C.muted)
   k.sub:SetPoint("TOPLEFT", PAD, -36)
   k.sub:SetPoint("RIGHT", -PAD, 0)
@@ -1708,12 +1764,14 @@ local function scanSay(msg)
   if ahButton then ahButton.status:SetText(msg) end
 end
 
--- The items worth a price: the Craft shopping list and the raid list.
+-- The items worth a price: the Craft shopping lists (every profession with a plan) and the raid list.
 local function scanTargets()
   local ids, seen = {}, {}
   local function add(id) if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end end
-  local out = craftPlan()
-  for _, r in ipairs(out and out.rows or {}) do add(r.id) end
+  for _, p in ipairs(craftProfessions()) do
+    local out = craftPlan(p)
+    for _, r in ipairs(out and out.rows or {}) do add(r.id) end
+  end
   local list = currentList()
   for _, it in ipairs(list and list.items or {}) do add(it.id) end
   return ids
@@ -2444,6 +2502,7 @@ local function fillCraft()
   for _, r in ipairs(k.rows) do r:Hide() end
   local has = out ~= nil
   for _, part in ipairs({ k.who, k.sub, k.status, k.rule, k.scroll, k.footer, k.view, k.goal, k.goalLabel }) do show(part, has) end
+  if not has then show(k.pick, false) end
   show(k.empty, not has)
   if not has then
     local names = {}
@@ -2455,6 +2514,13 @@ local function fillCraft()
   local steps = settings().craftView == "steps"
   k.view.label:SetText(steps and "Shopping" or "Steps")
   k.who:SetText(string.format("%s %d", plan.name, out.skill))
+  local several = #craftProfessions() > 1
+  show(k.pick, several)
+  if several then
+    local w = tonumber(safe(k.who.GetStringWidth, k.who)) or 130
+    k.arrow:ClearAllPoints()
+    k.arrow:SetPoint("LEFT", k.pick, "LEFT", 4 + w + 6, 0)
+  end
   if not safe(k.goal.HasFocus, k.goal) then k.goal:SetText(tostring(out.max)) end
   local next = out.steps[1]
   if out.done and out.max >= plan.max then
@@ -2466,7 +2532,9 @@ local function fillCraft()
   end
   local prices = db().prices
   local house = type(prices) == "table" and prices.house
-  if out.rank then
+  if out.rank and out.rank.how then
+    k.status:SetText(string.format("%s%s Your cap is %d.|r", hex(C.danger), out.rank.how, prof.max or 0))
+  elseif out.rank then
     k.status:SetText(string.format("%sTrain %s: your cap is %d.|r", hex(C.danger), out.rank.name, prof.max or 0))
   elseif out.done then
     k.status:SetText("")
@@ -2481,9 +2549,14 @@ local function fillCraft()
   if steps then
     for _, s in ipairs(out.steps) do
       local tip = { s.name, string.format("Skill %d to %d: about %d crafts.", s.from, s.to, s.crafts) }
-      if s.learn then tip[#tip + 1] = string.format("Plans from %s, %s.", s.learn.npc, s.learn.zone) else tip[#tip + 1] = "From the trainer." end
+      if s.learn then
+        local v = vendorOf(s.learn)
+        tip[#tip + 1] = string.format("%s from %s, %s.", plan.learnWord or "Plans", v.npc, v.zone)
+      else
+        tip[#tip + 1] = "From the trainer."
+      end
       list[#list + 1] = {
-        icon = safe(GetSpellTexture, s.spell) or "Interface\\Icons\\Trade_BlackSmithing",
+        icon = safe(GetSpellTexture, s.spell) or plan.icon or "Interface\\Icons\\Trade_BlackSmithing",
         name = string.format("%d-%d  %s", s.from, s.to, s.name),
         color = s.current and C.accent or C.text,
         count = string.format("x%d", s.crafts), done = false, tip = tip,
@@ -2501,7 +2574,10 @@ local function fillCraft()
         right = string.format("%s%d / %d|r%s", hex(done and C.dim or C.danger), r.have, r.need, cost)
       end
       local tip
-      if r.plans then tip = { name or ("Item " .. r.id), string.format("Sold by %s, %s.", r.plans.npc, r.plans.zone) } end
+      if r.plans then
+        local v = vendorOf(r.plans)
+        tip = { name or ("Item " .. r.id), string.format("Sold by %s, %s.", v.npc, v.zone) }
+      end
       list[#list + 1] = { id = r.id, icon = itemIcon(r.id), name = name or ("Item " .. r.id), color = name and C.item or C.muted,
         count = right, done = done, tip = tip }
     end
@@ -2723,7 +2799,7 @@ SlashCmdList.SNITCHBOT = function(msg)
       say("No run is open.")
     end
   elseif cmd == "craft" and tostring(msg):match("^%s*%S+%s+(%S+)") then
-    -- /sb craft 250 levels to 250; /sb craft max goes back to the cap.
+    -- /sb craft 250 levels to 250; /sb craft max goes back to the cap; /sb craft cooking shows Cooking.
     local arg = tostring(msg):match("^%s*%S+%s+(%S+)"):lower()
     local prof = craftProfession()
     if not prof then
@@ -2731,8 +2807,8 @@ SlashCmdList.SNITCHBOT = function(msg)
     elseif tonumber(arg) or arg == "max" then
       local goal = setCraftGoal(prof.line, tonumber(arg))
       say(string.format("%s goal: %d.", prof.name, goal))
-    else
-      say("/sb craft 250 sets the goal; /sb craft max goes back to the cap.")
+    elseif not switchCraft(arg) then
+      say("/sb craft 250 sets the goal, /sb craft max goes back to the cap, /sb craft cooking picks the profession.")
     end
     frame:Show()
     selectTab("craft")

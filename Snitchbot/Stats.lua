@@ -443,11 +443,34 @@ end
 
 -- ---- Need and Greed rolls: what you rolled, and whether you won.
 
+-- A Lua pattern for one of the game's roll strings. Forever's strings start
+-- with a loot history link that has a number of its own
+-- ("|HlootHistory:%d|h[Loot]|h: Need Roll - %d for %s by %s"): what's inside a
+-- link's |H...|h is matched but not kept, so the captures are the roll, the
+-- item and the name. Their order doesn't matter: ns.ParseRoll tells them
+-- apart by what they hold. "%2$s" style codes work too.
 local function rollPattern(f)
-  local p = f:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
-  p = p:gsub("%%s", "(.-)"):gsub("%%d", "(%%d+)")
-  -- Not anchored at the start: newer clients put a "[Loot]" link in front.
-  return p .. "$"
+  local out, i, inLink = {}, 1, false
+  while i <= #f do
+    local c2 = f:sub(i, i + 1)
+    if c2 == "|H" then inLink = true; out[#out + 1] = "|H"; i = i + 2
+    elseif c2 == "|h" then inLink = false; out[#out + 1] = "|h"; i = i + 2
+    elseif c2 == "%%" then out[#out + 1] = "%%"; i = i + 2
+    else
+      local spec, len = f:match("^%%%d*%$?([sd])()", i)
+      if spec then
+        local any = spec == "d" and "%d+" or ".-"
+        out[#out + 1] = inLink and any or ("(" .. any .. ")")
+        i = len
+      else
+        local ch = f:sub(i, i)
+        out[#out + 1] = ch:match("[%(%)%.%+%-%*%?%[%]%^%$%%]") and ("%" .. ch) or ch
+        i = i + 1
+      end
+    end
+  end
+  -- Not anchored at the start, in case a client puts something in front.
+  return table.concat(out) .. "$"
 end
 
 --- Patterns for "Need Roll - 87 for [item] by Name" and its Greed and
@@ -474,14 +497,16 @@ function ns.ParseRoll(msg, patterns)
   for _, p in ipairs(patterns) do
     local c = { msg:match(p.pattern) }
     if c[1] then
-      if p.kind == "won" then
-        local id, name = ns.ParseLoot(c[1])
-        if id then return { kind = "won", id = id, name = name } end
-      else
-        local id, name = ns.ParseLoot(c[2])
-        local roll = tonumber(c[1])
-        if id and roll then return { kind = p.kind, roll = roll, who = c[3], id = id, name = name } end
+      -- The item is the capture with an item link, the roll the number, the name the rest.
+      local link, roll, who
+      for _, v in ipairs(c) do
+        if v:find("|Hitem:", 1, true) then link = link or v
+        elseif not roll and v:match("^%d+$") then roll = tonumber(v)
+        elseif v ~= "" then who = who or v end
       end
+      local id, name = ns.ParseLoot(link)
+      if id and p.kind == "won" then return { kind = "won", id = id, name = name } end
+      if id and roll and roll >= 1 and roll <= 100 then return { kind = p.kind, roll = roll, who = who, id = id, name = name } end
     end
   end
   return nil

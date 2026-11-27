@@ -229,6 +229,17 @@ test("rolls: Need, Greed and Disenchant lines with or without a [Loot] link, win
     r[#r + 1] = tostring(ns.WonRoll(book, 2140, 5000)) -- too late
     r[#r + 1] = table.concat({ ns.RollAverage(book.need), book.need.hi, book.need.lo, book.need.won, #book.recent, book.recent[1].name }, ",")
     r[#r + 1] = tostring(ns.RollAverage(book.de))
+    -- WoW Forever's own strings: a loot history link with a number in front (seen 2026-11-27).
+    local F = ns.RollPatterns({
+      LOOT_ROLL_ROLLED_NEED = "|HlootHistory:%d|h[Loot]|h: Need Roll - %d for %s by %s",
+      LOOT_ROLL_ROLLED_GREED = "|HlootHistory:%d|h[Loot]|h: Greed Roll - %d for %s by %s",
+      LOOT_ROLL_YOU_WON = "|HlootHistory:%d|h[Loot]|h: You won: %s",
+      LOOT_ROLL_ROLLED_DE = "%3$s rolls %1$d (Disenchant) for %2$s",
+    })
+    r[#r + 1] = show(ns.ParseRoll("|HlootHistory:12|h[Loot]|h: Need Roll - 87 for " .. boots .. " by Vitoc", F))
+    r[#r + 1] = show(ns.ParseRoll("|HlootHistory:3|h[Loot]|h: Greed Roll - 1 for " .. knife .. " by Kesh", F))
+    r[#r + 1] = show(ns.ParseRoll("|HlootHistory:12|h[Loot]|h: You won: " .. boots, F))
+    r[#r + 1] = show(ns.ParseRoll("Vitoc rolls 64 (Disenchant) for " .. knife, F))
     return table.concat(r, "~")
   `);
   assert.deepEqual(out.split("~"), [
@@ -241,6 +252,10 @@ test("rolls: Need, Greed and Disenchant lines with or without a [Loot] link, win
     "need", "nil", "nil",
     "53.5,87,20,1,3,Carving Knife",
     "nil",
+    "need,87,Vitoc,6557,Bard's Boots",
+    "greed,1,Kesh,2140,Carving Knife",
+    "won,nil,nil,6557,Bard's Boots",
+    "de,64,Vitoc,2140,Carving Knife",
   ]);
 });
 
@@ -259,8 +274,8 @@ test("at max level the XP tab is Today: gold, loot, runs and your rolls; Stats d
     local boots = "|cff1eff00|Hitem:6557::::|h[Bard's Boots]|h|r"
     local x = SnitchbotFrame.x
     local r = { x.level.text, x.xp.text }
-    go("CHAT_MSG_LOOT", "Need Roll - 87 for " .. boots .. " by Vitoc")
-    go("CHAT_MSG_LOOT", "Need Roll - 99 for " .. boots .. " by Kesh")
+    go("CHAT_MSG_LOOT", "|HlootHistory:12|h[Loot]|h: Need Roll - 87 for " .. boots .. " by Vitoc")
+    go("CHAT_MSG_LOOT", "|HlootHistory:12|h[Loot]|h: Need Roll - 99 for " .. boots .. " by Kesh")
     go("CHAT_MSG_LOOT", "Kesh won: " .. boots)
     go("CHAT_MSG_LOOT", "Greed Roll - 30 for " .. boots .. " by Vitoc")
     MONEY = 62500

@@ -206,6 +206,95 @@ test("craft plan to a goal: stops at the goal, cuts the step it falls in, and as
   assert.deepEqual(more, ["true", "true", "true", "true", "Artisan", "Mithril Plate Pants", "208", "2", "1", "true", "true", "300", "300", "1"]);
 });
 
+test("rolls: Need, Greed and Disenchant lines with or without a [Loot] link, wins, and the averages", () => {
+  const out = run(`
+    local P = ns.RollPatterns({})
+    local boots = "|cff1eff00|Hitem:6557::::|h[Bard's Boots]|h|r"
+    local knife = "|cff9d9d9d|Hitem:2140::::|h[Carving Knife]|h|r"
+    local function show(r) if not r then return "nil" end return table.concat({ r.kind, tostring(r.roll), tostring(r.who), r.id, r.name }, ",") end
+    local r = {
+      show(ns.ParseRoll("|Hlootroll:12|h|cff00ccff[Loot]|r|h: Need Roll - 87 for " .. boots .. " by Vitoc", P)),
+      show(ns.ParseRoll("Greed Roll - 12 for " .. knife .. " by Kesh-Realm", P)),
+      show(ns.ParseRoll("Need Roll - 40 for " .. boots .. " by Kesh + Role Bonus", P)),
+      show(ns.ParseRoll("Disenchant Roll - 5 for " .. knife .. " by Vitoc", P)),
+      show(ns.ParseRoll("You won: " .. boots, P)),
+      show(ns.ParseRoll("You receive loot: " .. boots .. ".", P)),
+    }
+    local book = {}
+    ns.AddRoll(book, "need", 87, 6557, "Bard's Boots", 100)
+    ns.AddRoll(book, "need", 20, 2140, "Carving Knife", 110)
+    ns.AddRoll(book, "greed", 50, 2140, "Carving Knife", 120)
+    r[#r + 1] = tostring(ns.WonRoll(book, 6557, 200))
+    r[#r + 1] = tostring(ns.WonRoll(book, 6557, 210)) -- won once
+    r[#r + 1] = tostring(ns.WonRoll(book, 2140, 5000)) -- too late
+    r[#r + 1] = table.concat({ ns.RollAverage(book.need), book.need.hi, book.need.lo, book.need.won, #book.recent, book.recent[1].name }, ",")
+    r[#r + 1] = tostring(ns.RollAverage(book.de))
+    return table.concat(r, "~")
+  `);
+  assert.deepEqual(out.split("~"), [
+    "need,87,Vitoc,6557,Bard's Boots",
+    "greed,12,Kesh-Realm,2140,Carving Knife",
+    "need,40,Kesh,6557,Bard's Boots",
+    "de,5,Vitoc,2140,Carving Knife",
+    "won,nil,nil,6557,Bard's Boots",
+    "nil",
+    "need", "nil", "nil",
+    "53.5,87,20,1,3,Carving Knife",
+    "nil",
+  ]);
+});
+
+test("at max level the XP tab is Today: gold, loot, runs and your rolls; Stats drops leveling and lists rolls", () => {
+  const out = run(`
+    CLOCK, MONEY = 100000, 50000
+    time = function() return CLOCK end
+    GetMoney = function() return MONEY end
+    UnitLevel = function() return 60 end
+    UnitXPMax = function() return 0 end
+    UnitName = function() return "Vitoc" end
+    local e = SnitchbotEvents
+    local function go(event, ...) e.scripts.OnEvent(e, event, ...) end
+    go("PLAYER_LOGIN")
+    SlashCmdList.SNITCHBOT("today")
+    local boots = "|cff1eff00|Hitem:6557::::|h[Bard's Boots]|h|r"
+    local x = SnitchbotFrame.x
+    local r = { x.level.text, x.xp.text }
+    go("CHAT_MSG_LOOT", "Need Roll - 87 for " .. boots .. " by Vitoc")
+    go("CHAT_MSG_LOOT", "Need Roll - 99 for " .. boots .. " by Kesh")
+    go("CHAT_MSG_LOOT", "Kesh won: " .. boots)
+    go("CHAT_MSG_LOOT", "Greed Roll - 30 for " .. boots .. " by Vitoc")
+    MONEY = 62500
+    CLOCK = CLOCK + 30
+    SlashCmdList.SNITCHBOT("today")
+    r[#r + 1] = x.xp.text
+    r[#r + 1] = x.rateLabel.text .. "=" .. x.rate.text
+    r[#r + 1] = x.goldLabel.text .. "=" .. x.gold.text
+    r[#r + 1] = tostring(x.reset.shown)
+    SlashCmdList.SNITCHBOT("stats")
+    local lines = {}
+    for _, row in ipairs(SnitchbotFrame.st.rows) do
+      if row.shown then lines[#lines + 1] = (row.left.text or "") .. "=" .. (row.right.text or "") end
+    end
+    local all = table.concat(lines, "|")
+    r[#r + 1] = tostring(all:find("LEVELING", 1, true) ~= nil)
+    r[#r + 1] = tostring(all:find("YOUR ROLLS", 1, true) ~= nil)
+    r[#r + 1] = all:match("Need: average [^|]*") or "none"
+    r[#r + 1] = all:match("Greed: average [^|]*") or "none"
+    return table.concat(r, "~")
+  `, { ui: true });
+  const r = out.split("~");
+  assert.equal(r[0], "Today");
+  assert.equal(r[1], "No Need or Greed rolls yet today.");
+  assert.equal(r[2], "Your rolls: Need 87 (1)  ·  Greed 30 (1)");
+  assert.equal(r[3], "Dungeon runs=0");
+  assert.match(r[4], /^Gold=\+/);
+  assert.equal(r[5], "false");
+  assert.equal(r[6], "false");
+  assert.equal(r[7], "true");
+  assert.equal(r[8], "Need: average 87.0=1 roll  ·  won 0");
+  assert.equal(r[9], "Greed: average 30.0=1 roll  ·  won 0");
+});
+
 test("the window resizes from its corner: the size is kept, held to its bounds, and a double-click resets it", () => {
   const out = run(`
     local e = SnitchbotEvents

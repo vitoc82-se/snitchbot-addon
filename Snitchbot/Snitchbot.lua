@@ -509,6 +509,32 @@ local function char()
   return c
 end
 
+-- Today, per character: kills, loot value, time played, gold since the day's
+-- first look, and your rolls. A new day starts a new one.
+local function today()
+  local c, t = char(), now()
+  local day = safe(date, "%Y-%m-%d", t) or tostring(math.floor(t / 86400))
+  if type(c.today) ~= "table" or c.today.day ~= day then
+    c.today = { day = day, kills = 0, value = 0, played = 0, moneyStart = money(), rolls = {} }
+  end
+  c.today.rolls = type(c.today.rolls) == "table" and c.today.rolls or {}
+  return c.today
+end
+
+-- Your rolls for good, per character.
+local function rollBook()
+  local c = char()
+  c.rolls = type(c.rolls) == "table" and c.rolls or {}
+  return c.rolls
+end
+
+-- Max level: no XP to earn, so the XP tab shows today instead.
+local function atMaxLevel()
+  local r = reading()
+  local cap = tonumber(safe(GetMaxPlayerLevel)) or 60
+  return r.level >= cap or (r.level > 0 and r.max <= 0)
+end
+
 -- Adds n under `field`.`key` for the session, the run you're in and the character.
 local function tally(field, key, n)
   if not key or not n or n == 0 then return end
@@ -536,6 +562,8 @@ local function tick()
     end
     local day = math.floor(t / 86400)
     c.days[day] = (c.days[day] or 0) + dt
+    local td = today()
+    td.played = (td.played or 0) + dt
     for old in pairs(c.days) do if old < day - 30 then c.days[old] = nil end end
   end
   lastTick = t
@@ -761,6 +789,8 @@ end
 local function countKill(name)
   local s = session()
   s.kills = s.kills + 1
+  local td = today()
+  td.kills = (td.kills or 0) + 1
   local run = db().run
   if run then
     run.kills = run.kills + 1
@@ -868,6 +898,8 @@ local function onLoot(msg, who)
       value = value * (l.count or 1)
       local s = session()
       s.value = (s.value or 0) + value
+      local td = today()
+      td.value = (td.value or 0) + value
       if run then run.value = (run.value or 0) + value end
     end
   end
@@ -883,6 +915,24 @@ local function onLoot(msg, who)
     local boss = run.lastKill and now() - (run.lastKill.at or 0) <= 300 and run.lastKill.name or nil
     run.loot[#run.loot + 1] = { id = l.id, name = l.name, q = quality or 2, n = l.count, who = name or me(), boss = boss }
   end
+  update()
+end
+
+-- Your Need, Greed and Disenchant rolls, and the items you won with them.
+local ROLLS = ns.RollPatterns(_G)
+local function onRoll(msg)
+  local r = ns.ParseRoll(msg, ROLLS)
+  if not r then return end
+  local t = now()
+  if r.kind == "won" then
+    ns.WonRoll(rollBook(), r.id, t)
+    ns.WonRoll(today().rolls, r.id, t)
+    return update()
+  end
+  local who = ns.ShortName(r.who or "")
+  if who ~= me() and r.who ~= (YOU or "You") then return end
+  ns.AddRoll(rollBook(), r.kind, r.roll, r.id, r.name, t)
+  ns.AddRoll(today().rolls, r.kind, r.roll, r.id, r.name, t)
   update()
 end
 
@@ -1011,7 +1061,7 @@ end
 local TABS = {
   { key = "raid", label = "Raid" },
   { key = "craft", label = "Craft" },
-  { key = "xp", label = "XP" },
+  { key = "xp", label = "XP", alt = "Today" }, -- "Today" at max level
   { key = "runs", label = "Runs" },
   { key = "stats", label = "Stats" },
   { key = "settings", label = "Settings" },
@@ -1186,14 +1236,15 @@ local function makeXPPane(p)
   x.xp:SetPoint("TOPLEFT", PAD, -52)
   x.xp:SetPoint("RIGHT", -PAD, 0)
 
-  x.rate = card(p, 0, 0, -76, "XP per hour")
-  x.ttl = card(p, 1, 0, -76, "To next level")
+  x.rate, x.rateLabel = card(p, 0, 0, -76, "XP per hour")
+  x.ttl, x.ttlLabel = card(p, 1, 0, -76, "To next level")
   x.gold, x.goldLabel = card(p, 0, 1, -76, "Gold")
-  x.value = card(p, 1, 1, -76, "Your loot is worth")
-  x.kills = card(p, 0, 2, -76, "Kills")
-  x.time = card(p, 1, 2, -76, "Session")
+  x.value, x.valueLabel = card(p, 1, 1, -76, "Your loot is worth")
+  x.kills, x.killsLabel = card(p, 0, 2, -76, "Kills")
+  x.time, x.timeLabel = card(p, 1, 2, -76, "Session")
   x.value:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   local reset = smallButton(p, "Reset session", 104)
+  x.reset = reset
   reset:SetPoint("TOPRIGHT", -PAD, -224)
   reset:SetScript("OnClick", function() resetSession(); update() end)
   divider(p, -254)
@@ -1789,13 +1840,20 @@ local function makeTabs()
     b.label:SetJustifyH("CENTER")
     b.label:SetText(t.label)
     labels[i] = b
-    sum = sum + (tonumber(safe(b.label.GetStringWidth, b.label)) or 30)
+    local w = tonumber(safe(b.label.GetStringWidth, b.label)) or 30
+    if t.alt then
+      b.label:SetText(t.alt)
+      w = math.max(w, tonumber(safe(b.label.GetStringWidth, b.label)) or 30)
+      b.label:SetText(t.label)
+    end
+    b.width = w
+    sum = sum + w
   end
   local room = WIDTH - 2 * (PAD - 4) - 4 * (#TABS - 1)
   local pad = math.max(10, math.min(22, math.floor((room - sum) / #TABS)))
   for i, t in ipairs(TABS) do
     local b = labels[i]
-    local w = math.max(34, (tonumber(safe(b.label.GetStringWidth, b.label)) or 30) + pad)
+    local w = math.max(34, b.width + pad)
     b:SetSize(w, TOP - 34)
     b:SetPoint("BOTTOMLEFT", x, 0)
     x = x + w + 4
@@ -2016,9 +2074,63 @@ local function runLine(run, t)
   return (ns.RunSummary(run, t):gsub("^.-: ", ""):gsub("%.$", ""))
 end
 
-local function fillXP()
+-- The day a time falls on, as today() names days.
+local function dayOf(t)
+  return safe(date, "%Y-%m-%d", t) or tostring(math.floor((tonumber(t) or 0) / 86400))
+end
+
+local KIND_LABEL = { need = "Need", greed = "Greed", de = "Disenchant" }
+
+-- "Need 62 (4)  ·  Greed 48 (11)": the average and how many, for each kind you rolled.
+local function rollSummary(book)
+  local parts = {}
+  for _, kind in ipairs({ "need", "greed", "de" }) do
+    local avg = ns.RollAverage(book[kind])
+    if avg then parts[#parts + 1] = string.format("%s %.0f (%d)", KIND_LABEL[kind], avg, book[kind].n) end
+  end
+  return #parts > 0 and table.concat(parts, "  ·  ") or nil
+end
+
+-- At max level: today's gold, loot, kills, runs, time and rolls.
+local function fillToday()
+  local x, td, t = frame.x, today(), now()
+  x.level:SetText("Today")
+  x.pct:SetText(safe(date, "%a %d %b", t) or "")
+  for _, part in ipairs({ x.track, x.bar, x.rested, x.reset }) do show(part, false) end
+  local rolls = rollSummary(td.rolls)
+  x.xp:SetText(rolls and ("Your rolls: " .. rolls) or "No Need or Greed rolls yet today.")
+
+  local d, n = db(), 0
+  for _, run in ipairs(runs()) do if run.started and dayOf(run.started) == td.day then n = n + 1 end end
+  if d.run and d.run.started and dayOf(d.run.started) == td.day then n = n + 1 end
+  local earned = money() - (td.moneyStart or money())
+  local played = td.played or 0
+  x.rateLabel:SetText("Dungeon runs")
+  x.rate:SetText(ns.Num(n))
+  x.ttlLabel:SetText("Gold per hour")
+  x.ttl:SetText(played >= 60 and earned ~= 0 and ns.Money(earned * 3600 / played) or "–")
+  x.goldLabel:SetText("Gold")
+  x.gold:SetText((earned > 0 and "+" or "") .. ns.Money(earned))
+  x.valueLabel:SetText("Your loot is worth")
+  x.value:SetText((td.value or 0) > 0 and ns.Money(td.value) or "–")
+  x.killsLabel:SetText("Kills")
+  x.kills:SetText(ns.Num(td.kills or 0))
+  x.timeLabel:SetText("Played")
+  x.time:SetText(ns.Duration(played))
+end
+
+-- Under max level: XP, the time to the next level and this session.
+local function fillLeveling()
   local x, s, r, t = frame.x, session(), reading(), now()
   local maxLevel = r.max <= 0
+  show(x.track, true)
+  show(x.bar, true)
+  show(x.reset, true)
+  x.rateLabel:SetText("XP per hour")
+  x.ttlLabel:SetText("To next level")
+  x.valueLabel:SetText("Your loot is worth")
+  x.killsLabel:SetText("Kills")
+  x.timeLabel:SetText("Session")
   x.level:SetText("Level " .. r.level)
   local share = maxLevel and 1 or math.min(1, r.xp / r.max)
   x.pct:SetText(maxLevel and "" or string.format("%.1f%%", share * 100))
@@ -2042,6 +2154,11 @@ local function fillXP()
   x.gold:SetText((earned > 0 and "+" or "") .. ns.Money(earned))
   x.goldLabel:SetText(goldRate and ("Gold  ·  " .. ns.Money(goldRate) .. "/h") or "Gold")
   x.value:SetText((s.value or 0) > 0 and ns.Money(s.value) or "–")
+end
+
+local function fillXP()
+  local x, t = frame.x, now()
+  if atMaxLevel() then fillToday() else fillLeveling() end
 
   local d = db()
   local run = d.run or runs()[1]
@@ -2113,7 +2230,9 @@ local function fillStats()
   local function note(left) lines[#lines + 1] = { left = left, note = true } end
   local done = runs()
 
-  -- Leveling
+  -- Leveling, until there's no more to level
+  local leveling = not atMaxLevel()
+  if leveling then
   head("LEVELING")
   local cur = c.levels[r.level]
   row("Level " .. r.level, cur and (ns.Duration(cur.played or 0) .. " played at this level") or "–")
@@ -2132,6 +2251,7 @@ local function fillStats()
   for i, level in ipairs(recent) do
     if i > 5 then break end
     row("Level " .. level, ns.Duration(c.levels[level].played or 0) .. "  ·  " .. (safe(date, "%b %d", c.levels[level].ended) or ""), C.muted)
+  end
   end
 
   -- XP and gold this session
@@ -2167,6 +2287,32 @@ local function fillStats()
     table.sort(reps, function(a, b) return a.n > b.n end)
     head("REPUTATION THIS SESSION")
     for _, x in ipairs(reps) do row(x.faction, (x.n > 0 and "+" or "") .. ns.Num(x.n)) end
+  end
+
+  -- Your Need and Greed rolls
+  head("YOUR ROLLS")
+  local book, td, anyRoll = rollBook(), today().rolls, false
+  for _, kind in ipairs({ "need", "greed", "de" }) do
+    local all = book[kind]
+    local avg = ns.RollAverage(all)
+    if avg then
+      anyRoll = true
+      row(KIND_LABEL[kind] .. ": average " .. string.format("%.1f", avg),
+        string.format("%d %s  ·  won %d", all.n, all.n == 1 and "roll" or "rolls", all.won or 0))
+      local tavg = ns.RollAverage(td[kind])
+      note(string.format("Highest %d, lowest %d%s", all.hi or 0, all.lo or 0,
+        tavg and string.format("  ·  today %.1f (%d)", tavg, td[kind].n) or ""))
+    end
+  end
+  if anyRoll then
+    note("A fair roll averages 50.5.")
+    for i, r in ipairs(book.recent or {}) do
+      if i > 5 then break end
+      row("   " .. (r.name or ("Item " .. tostring(r.id))), string.format("%s %d%s", KIND_LABEL[r.kind] or r.kind, r.roll, r.won and "  ·  won" or ""),
+        C.muted, r.won and C.success or nil)
+    end
+  else
+    note("None yet: roll Need or Greed on an item and it shows here.")
   end
 
   -- Personal bests
@@ -2343,6 +2489,7 @@ end
 
 update = function()
   if not frame or not frame:IsShown() then return end
+  if tabButtons.xp then tabButtons.xp.label:SetText(atMaxLevel() and "Today" or "XP") end
   local tab = settings().tab
   if tab == "raid" then refresh()
   elseif tab == "craft" then fillCraft()
@@ -2417,6 +2564,7 @@ local function onEvent(_, event, ...)
   elseif event == "CHAT_MSG_LOOT" then
     local msg, who, _, _, who2 = ...
     onLoot(msg, (who and who ~= "") and who or who2)
+    onRoll(msg)
   elseif event == "CHAT_MSG_SYSTEM" then
     local run, msg = db().run, tostring((...) or "")
     local reset = ns.KillPattern(INSTANCE_RESET_SUCCESS or "%s has been reset.")
@@ -2532,6 +2680,9 @@ SlashCmdList.SNITCHBOT = function(msg)
     end
     frame:Show()
     selectTab("craft")
+  elseif cmd == "today" then
+    frame:Show()
+    selectTab("xp")
   elseif cmd == "xp" or cmd == "runs" or cmd == "stats" or cmd == "settings" or cmd == "raid" or cmd == "craft" then
     frame:Show()
     selectTab(cmd)

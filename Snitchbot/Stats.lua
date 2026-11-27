@@ -441,4 +441,81 @@ function ns.CharCode(c)
     table.concat(levels, ","), table.concat(runs, ","), pairsOf(c.gold), pairsOf(c.xp), pairsOf(c.rep), "END" }, ";")
 end
 
+-- ---- Need and Greed rolls: what you rolled, and whether you won.
+
+local function rollPattern(f)
+  local p = f:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+  p = p:gsub("%%s", "(.-)"):gsub("%%d", "(%%d+)")
+  -- Not anchored at the start: newer clients put a "[Loot]" link in front.
+  return p .. "$"
+end
+
+--- Patterns for "Need Roll - 87 for [item] by Name" and its Greed and
+--- Disenchant forms, from the game's own strings when it has them.
+function ns.RollPatterns(g)
+  g = g or {}
+  local list = {}
+  local function add(kind, key, fallback)
+    local f = type(g[key]) == "string" and g[key] ~= "" and g[key] or fallback
+    list[#list + 1] = { kind = kind, pattern = rollPattern(f) }
+  end
+  add("need", "LOOT_ROLL_ROLLED_NEED_ROLE_BONUS", "Need Roll - %d for %s by %s + Role Bonus")
+  add("need", "LOOT_ROLL_ROLLED_NEED", "Need Roll - %d for %s by %s")
+  add("greed", "LOOT_ROLL_ROLLED_GREED", "Greed Roll - %d for %s by %s")
+  add("de", "LOOT_ROLL_ROLLED_DE", "Disenchant Roll - %d for %s by %s")
+  add("won", "LOOT_ROLL_YOU_WON", "You won: %s")
+  return list
+end
+
+--- A loot chat line -> { kind, roll, who, id, name } for a roll, { kind = "won", id, name }
+--- for an item you won, or nil.
+function ns.ParseRoll(msg, patterns)
+  msg = tostring(msg or "")
+  for _, p in ipairs(patterns) do
+    local c = { msg:match(p.pattern) }
+    if c[1] then
+      if p.kind == "won" then
+        local id, name = ns.ParseLoot(c[1])
+        if id then return { kind = "won", id = id, name = name } end
+      else
+        local id, name = ns.ParseLoot(c[2])
+        local roll = tonumber(c[1])
+        if id and roll then return { kind = p.kind, roll = roll, who = c[3], id = id, name = name } end
+      end
+    end
+  end
+  return nil
+end
+
+--- Adds one of your rolls to `book` = { need = { n, sum, won, hi, lo }, greed, de, recent }.
+function ns.AddRoll(book, kind, roll, id, name, at)
+  book[kind] = type(book[kind]) == "table" and book[kind] or { n = 0, sum = 0, won = 0 }
+  local s = book[kind]
+  s.n, s.sum = s.n + 1, s.sum + roll
+  s.hi = math.max(s.hi or roll, roll)
+  s.lo = math.min(s.lo or roll, roll)
+  book.recent = type(book.recent) == "table" and book.recent or {}
+  table.insert(book.recent, 1, { kind = kind, roll = roll, id = id, name = name, at = at })
+  while #book.recent > 20 do table.remove(book.recent) end
+end
+
+--- You won `id`: your last roll on it in the last 10 minutes counts as a win.
+function ns.WonRoll(book, id, at)
+  for _, r in ipairs(type(book.recent) == "table" and book.recent or {}) do
+    if r.id == id and not r.won and (at or 0) - (r.at or 0) <= 600 then
+      r.won = true
+      local s = book[r.kind]
+      if s then s.won = (s.won or 0) + 1 end
+      return r.kind
+    end
+  end
+  return nil
+end
+
+--- The average roll of a kind, or nil with none.
+function ns.RollAverage(s)
+  if type(s) ~= "table" or (s.n or 0) == 0 then return nil end
+  return s.sum / s.n
+end
+
 return ns

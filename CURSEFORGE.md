@@ -35,6 +35,9 @@ The **Stats** tab collects it all:
 - **Where your gold comes from:** loot, quests, vendors, the auction house, trades, repairs, training and flights
 - **Boss loot:** what each boss has dropped across your runs
 - **Who you run with** most
+- **Your rolls:** average Need and Greed roll, highest, lowest and how often you won
+
+At max level the XP tab becomes **Today**: gold and gold per hour, loot value, kills, dungeon runs, time played and your rolls, for today.
 
 ## Raid night
 

@@ -6,9 +6,9 @@ One window with six tabs. Open it with the minimap button (or `/sb`); it stays o
 
 - **Raid**: what to bring for raid night, how many you have in bags and bank, what's missing. **New list** pastes the code from **Raid list** on [auction.snitchbot.app](https://auction.snitchbot.app) (**Copy for the addon**). **Check buffs** lists who in your group has no flask, no elixir or no food, and how many have world buffs.
 - **Craft**: level a profession to 300, or to the goal you type in the **Goal** box (or `/sb craft 250`; `/sb craft max` for the cap). It reads your skill, lists the steps left (recipe, skill range, crafts), and makes a shopping list from bags and bank: grinding stones become the stone to make them, plans name their vendor, and what's missing is priced at your pasted AH prices. It says when to train the next rank. **Steps** and **Shopping** switch the view. Blacksmithing for now, on Wowhead's "Tried & Tested in Forever" route.
-- **XP**: XP per hour, time to next level, kills, gold, what your loot is worth, and the current dungeon run with an **End run** button (or `/sb end`). A run ends by itself when you leave the area alive or leave the group outside, else 15 minutes after you step out.
+- **XP** (**Today** at max level): XP per hour, time to next level, kills, gold, what your loot is worth; at max level today's gold and gold per hour, loot, kills, dungeon runs, time played and your average rolls instead (`/sb today`). Also the current dungeon run with an **End run** button (or `/sb end`). A run ends by itself when you leave the area alive or leave the group outside, else 15 minutes after you step out.
 - **Runs**: every dungeon run: time, kills, XP per hour, bosses (kills and wipes), loot, gold, loot value, reputation and who you ran with. Hover a run for the details. A wipe, a corpse run or waiting at the door stays the same run; another copy of the dungeon (a reset, or a new group) is a new one. At max level a kill is an enemy you see die (your target or a nameplate), since there's no XP to count. When a run ends, Snitchbot compares it with your earlier runs of that dungeon.
-- **Stats**: time played per level and when you'll reach the next milestone, where this session's XP and gold came from, reputation, personal bests per dungeon, who you run with most, and what each boss dropped. **Copy for snitchbot.app** puts it all on your character's page on [myself.snitchbot.app](https://myself.snitchbot.app), for you only.
+- **Stats**: time played per level and when you'll reach the next milestone, where this session's XP and gold came from, reputation, your Need and Greed rolls (average, highest, lowest, wins, the last five), personal bests per dungeon, who you run with most, and what each boss dropped. **Copy for snitchbot.app** puts it all on your character's page on [myself.snitchbot.app](https://myself.snitchbot.app), for you only.
 - **Settings**: start the combat log in dungeons, open on entering a dungeon, tell your group, the minimap button, **Paste AH prices** (from **Copy prices for the addon** on auction.snitchbot.app) and **Probe the game**.
 
 **Snitchbot scan**, a button above the auction house window (or `/sb scan` there), reads prices in the game: a full scan of every auction when the client allows it (once per 15 minutes), else a search of each item on your Craft and Raid lists. It keeps the lowest buyout per item; no pasting needed.
@@ -17,7 +17,7 @@ Snitchbot also warns you when your gear is low on durability as a dungeon starts
 
 Drag the window's bottom-right corner to make it bigger (double-click the corner for the first size); the size is kept.
 
-Slash commands, all optional: `/sb` (open or close), `/sb craft`, `/sb craft 250`, `/sb scan`, `/sb xp`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb end`, `/sb paste`, `/sb probe`.
+Slash commands, all optional: `/sb` (open or close), `/sb craft`, `/sb craft 250`, `/sb scan`, `/sb xp`, `/sb today`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb end`, `/sb paste`, `/sb probe`.
 
 ## Development
 

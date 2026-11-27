@@ -206,6 +206,40 @@ test("craft plan to a goal: stops at the goal, cuts the step it falls in, and as
   assert.deepEqual(more, ["true", "true", "true", "true", "Artisan", "Mithril Plate Pants", "208", "2", "1", "true", "true", "300", "300", "1"]);
 });
 
+test("the window resizes from its corner: the size is kept, held to its bounds, and a double-click resets it", () => {
+  const out = run(`
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    SlashCmdList.SNITCHBOT("craft")
+    local f = SnitchbotFrame
+    local sizes = {}
+    f.SetSize = function(_, w, h) sizes[#sizes + 1] = w .. "x" .. h end
+    f.StartSizing = function(_, corner) SIZING = corner end
+    local W, H = 520, 640
+    f.GetWidth = function() return W end
+    f.GetHeight = function() return H end
+    f.GetPoint = function() return "TOPLEFT", UIParent, "BOTTOMLEFT", 100, 700 end
+    f.grip.scripts.OnMouseDown(f.grip, "LeftButton")
+    f.grip.scripts.OnMouseUp(f.grip)
+    local s = SnitchbotDB.settings
+    local r = { SIZING, s.size[1] .. "x" .. s.size[2], s.pos.SnitchbotFrame[1], sizes[#sizes] }
+    W, H = 2000, 100
+    f.grip.scripts.OnMouseUp(f.grip)
+    r[#r + 1] = sizes[#sizes]
+    f.grip.scripts.OnDoubleClick(f.grip)
+    r[#r + 1] = tostring(s.size)
+    r[#r + 1] = sizes[#sizes]
+    -- The rows in a scroll area follow its width.
+    local k = f.k
+    local widths = {}
+    k.child.SetWidth = function(_, w) widths[#widths + 1] = w end
+    k.scroll.scripts.OnSizeChanged(k.scroll, 488, 300)
+    r[#r + 1] = widths[1]
+    return table.concat(r, "~")
+  `, { ui: true });
+  assert.deepEqual(out.split("~"), ["BOTTOMRIGHT", "520x640", "TOPLEFT", "520x640", "800x470", "nil", "360x470", "488"]);
+});
+
 test("the Craft tab goal: type it in the box or /sb craft 250, kept per profession, max goes back to the cap", () => {
   const out = run(`
     GetProfessions = function() return 3 end

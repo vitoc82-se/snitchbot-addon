@@ -220,10 +220,8 @@ local function window(name, width, height, strata, keepOnEscape)
   under:SetPoint("BOTTOMRIGHT")
   header:EnableMouse(true)
   header:RegisterForDrag("LeftButton")
-  header:SetScript("OnDragStart", function() f:StartMoving() end)
-  header:SetScript("OnDragStop", function()
-    f:StopMovingOrSizing()
-    -- Remembered here: the game's own layout cache skips windows made after login, like these.
+  -- Remembered here: the game's own layout cache skips windows made after login, like these.
+  function f.savePos()
     safe(f.SetUserPlaced, f, false)
     local point, _, relPoint, x, y = f:GetPoint()
     if point and x and y then
@@ -232,6 +230,11 @@ local function window(name, width, height, strata, keepOnEscape)
       d.settings.pos = type(d.settings.pos) == "table" and d.settings.pos or {}
       d.settings.pos[name] = { point, relPoint or point, math.floor(x + 0.5), math.floor(y + 0.5) }
     end
+  end
+  header:SetScript("OnDragStart", function() f:StartMoving() end)
+  header:SetScript("OnDragStop", function()
+    f:StopMovingOrSizing()
+    f.savePos()
   end)
   f.header = header
   mark(header):SetPoint("LEFT", PAD, 0)
@@ -273,8 +276,19 @@ local function scrollArea(parent, step)
     place()
   end)
   sf:SetScript("OnScrollRangeChanged", place)
+  -- The rows inside are as wide as the area, however wide the window is.
+  sf:SetScript("OnSizeChanged", function(_, w)
+    if tonumber(w) and w > 0 then child:SetWidth(w) end
+    place()
+  end)
   sf.place = place
   return sf, child
+end
+
+-- How wide a widget is now, or `fallback` before the game has laid it out.
+local function widthOf(w, fallback)
+  local n = tonumber(safe(w.GetWidth, w))
+  return n and n > 0 and n or fallback
 end
 
 -- ---- Frames
@@ -1004,6 +1018,15 @@ local TABS = {
 }
 local TOP = 66 -- header and tab bar
 local HEIGHT = 470
+local MAX_WIDTH, MAX_HEIGHT = 800, 1000
+
+-- The window's size: what you dragged it to, kept between the smallest and largest.
+local function windowSize()
+  local s = settings().size
+  local w = type(s) == "table" and tonumber(s[1]) or WIDTH
+  local h = type(s) == "table" and tonumber(s[2]) or HEIGHT
+  return math.max(WIDTH, math.min(MAX_WIDTH, math.floor(w + 0.5))), math.max(HEIGHT, math.min(MAX_HEIGHT, math.floor(h + 0.5)))
+end
 local panes, tabButtons = {}, {}
 
 local function smallButton(parent, label, width)
@@ -1097,7 +1120,7 @@ local function makeRaidPane(p)
   frame.track = fill(footer, C.track, "ARTWORK")
   frame.track:SetHeight(3)
   frame.track:SetPoint("BOTTOMLEFT", PAD - 1, 12)
-  frame.track:SetWidth(TRACK)
+  frame.track:SetPoint("RIGHT", footer, "RIGHT", -(PAD + 44), 0)
   frame.bar = fill(footer, C.accent, "OVERLAY")
   frame.bar:SetHeight(3)
   frame.bar:SetPoint("LEFT", frame.track, "LEFT")
@@ -1118,11 +1141,18 @@ local XPW = WIDTH - 2 * PAD
 
 -- A stat card: a small label over a big number. Returns the number and the label.
 local CARD_GAP, CARD_H = 8, 42
-local CARD_W = (XPW - CARD_GAP) / 2
+-- Two columns, each half the pane, however wide it is.
 local function card(parent, col, row, y, label)
   local c = CreateFrame("Frame", nil, parent)
-  c:SetSize(CARD_W, CARD_H)
-  c:SetPoint("TOPLEFT", PAD + col * (CARD_W + CARD_GAP), y - row * (CARD_H + 6))
+  c:SetHeight(CARD_H)
+  local top = y - row * (CARD_H + 6)
+  if col == 0 then
+    c:SetPoint("TOPLEFT", PAD, top)
+    c:SetPoint("TOPRIGHT", parent, "TOP", -CARD_GAP / 2, top)
+  else
+    c:SetPoint("TOPLEFT", parent, "TOP", CARD_GAP / 2, top)
+    c:SetPoint("TOPRIGHT", -PAD, top)
+  end
   fill(c, C.card):SetAllPoints()
   local l = text(c, 11, "regular", C.muted)
   l:SetPoint("TOPLEFT", 10, -6)
@@ -1144,7 +1174,8 @@ local function makeXPPane(p)
   local track = fill(p, C.track, "ARTWORK")
   track:SetHeight(5)
   track:SetPoint("TOPLEFT", PAD, -40)
-  track:SetWidth(XPW)
+  track:SetPoint("RIGHT", -PAD, 0)
+  x.track = track
   x.rested = fill(p, { 0.47, 0.6, 1, 0.45 }, "ARTWORK", 1)
   x.rested:SetHeight(5)
   x.rested:SetPoint("LEFT", track, "LEFT")
@@ -1549,7 +1580,7 @@ local function makeCraftPane(p)
   k.track = fill(footer, C.track, "ARTWORK")
   k.track:SetHeight(3)
   k.track:SetPoint("BOTTOMLEFT", PAD - 1, 12)
-  k.track:SetWidth(TRACK)
+  k.track:SetPoint("RIGHT", footer, "RIGHT", -(PAD + 44), 0)
   k.bar = fill(footer, C.accent, "OVERLAY")
   k.bar:SetHeight(3)
   k.bar:SetPoint("LEFT", k.track, "LEFT")
@@ -1858,6 +1889,46 @@ local function makeFrame()
   makeSettingsPane(panes.settings)
   makeMinimapButton()
 
+  -- Drag the corner to make it bigger; double-click the corner for the first size.
+  frame:SetSize(windowSize())
+  safe(frame.SetResizable, frame, true)
+  if frame.SetResizeBounds then
+    safe(frame.SetResizeBounds, frame, WIDTH, HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+  else
+    safe(frame.SetMinResize, frame, WIDTH, HEIGHT)
+    safe(frame.SetMaxResize, frame, MAX_WIDTH, MAX_HEIGHT)
+  end
+  local grip = CreateFrame("Button", nil, frame)
+  grip:SetSize(12, 12)
+  grip:SetPoint("BOTTOMRIGHT", -1, 1)
+  safe(grip.SetFrameLevel, grip, (tonumber(safe(frame.GetFrameLevel, frame)) or 1) + 20)
+  grip.tex = grip:CreateTexture(nil, "OVERLAY")
+  grip.tex:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+  grip.tex:SetAllPoints()
+  grip.tex:SetVertexColor(C.muted[1], C.muted[2], C.muted[3])
+  grip:SetScript("OnEnter", function() grip.tex:SetVertexColor(C.text[1], C.text[2], C.text[3]) end)
+  grip:SetScript("OnLeave", function() grip.tex:SetVertexColor(C.muted[1], C.muted[2], C.muted[3]) end)
+  grip:SetScript("OnMouseDown", function(_, b)
+    if b == nil or b == "LeftButton" then frame:StartSizing("BOTTOMRIGHT") end
+  end)
+  grip:SetScript("OnMouseUp", function()
+    frame:StopMovingOrSizing()
+    local w, h = tonumber(safe(frame.GetWidth, frame)), tonumber(safe(frame.GetHeight, frame))
+    if w and h then
+      settings().size = { math.floor(w + 0.5), math.floor(h + 0.5) }
+      frame:SetSize(windowSize())
+    end
+    frame.savePos()
+    update()
+  end)
+  grip:SetScript("OnDoubleClick", function()
+    settings().size = nil
+    frame:SetSize(windowSize())
+    frame.savePos()
+    update()
+  end)
+  frame.grip = grip
+
   local elapsed = 0
   frame:SetScript("OnUpdate", function(_, dt)
     elapsed = elapsed + (dt or 0)
@@ -1889,7 +1960,7 @@ end
 
 local function setBar(done, total)
   local share = total > 0 and done / total or 0
-  frame.bar:SetWidth(math.max(0.01, TRACK * share))
+  frame.bar:SetWidth(math.max(0.01, widthOf(frame.track, TRACK) * share))
   show(frame.bar, share > 0)
   frame.pct:SetText(string.format("%d%%", math.floor(share * 100 + 0.5)))
 end
@@ -1951,10 +2022,11 @@ local function fillXP()
   x.level:SetText("Level " .. r.level)
   local share = maxLevel and 1 or math.min(1, r.xp / r.max)
   x.pct:SetText(maxLevel and "" or string.format("%.1f%%", share * 100))
-  x.bar:SetWidth(math.max(0.01, XPW * share))
+  local xpw = widthOf(x.track, XPW)
+  x.bar:SetWidth(math.max(0.01, xpw * share))
   local rested = tonumber(safe(GetXPExhaustion)) or 0
   show(x.rested, rested > 0 and not maxLevel)
-  x.rested:SetWidth(math.max(0.01, XPW * math.min(1, (r.xp + rested) / math.max(1, r.max))))
+  x.rested:SetWidth(math.max(0.01, xpw * math.min(1, (r.xp + rested) / math.max(1, r.max))))
   x.xp:SetText(maxLevel and "Max level" or string.format("%s / %s XP%s", ns.Num(r.xp), ns.Num(r.max),
     rested > 0 and ("  ·  " .. ns.Num(rested) .. " rested") or ""))
 
@@ -2263,7 +2335,7 @@ local function fillCraft()
     k.ready:SetText(string.format("%d of %d materials ready", ready, #list))
     share = #list > 0 and ready / #list or 1
   end
-  k.bar:SetWidth(math.max(0.01, TRACK * share))
+  k.bar:SetWidth(math.max(0.01, widthOf(k.track, TRACK) * share))
   show(k.bar, share > 0)
   k.pct:SetText(string.format("%d%%", math.floor(share * 100 + 0.5)))
   if k.scroll.place then k.scroll.place() end

@@ -15,6 +15,8 @@ One window with six tabs. Open it with the minimap button (or `/sb`); it stays o
 
 Snitchbot also warns you when your gear is low on durability as a dungeon starts.
 
+Drag the window's bottom-right corner to make it bigger (double-click the corner for the first size); the size is kept.
+
 Slash commands, all optional: `/sb` (open or close), `/sb craft`, `/sb craft 250`, `/sb scan`, `/sb xp`, `/sb runs`, `/sb stats`, `/sb check`, `/sb prices`, `/sb export`, `/sb end`, `/sb paste`, `/sb probe`.
 
 ## Development

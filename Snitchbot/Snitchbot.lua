@@ -2549,12 +2549,16 @@ local function fillCraft()
   if steps then
     for _, s in ipairs(out.steps) do
       local tip = { s.name, string.format("Skill %d to %d: about %d crafts.", s.from, s.to, s.crafts) }
-      if s.learn then
+      if s.learn and s.learn.trainer then
+        local v = vendorOf(s.learn)
+        tip[#tip + 1] = string.format("Trained by %s, %s.", v.npc, v.zone)
+      elseif s.learn then
         local v = vendorOf(s.learn)
         tip[#tip + 1] = string.format("%s from %s, %s.", plan.learnWord or "Plans", v.npc, v.zone)
-      else
+      elseif s.spell then
         tip[#tip + 1] = "From the trainer."
       end
+      if s.note then tip[#tip + 1] = s.note end
       list[#list + 1] = {
         icon = safe(GetSpellTexture, s.spell) or plan.icon or "Interface\\Icons\\Trade_BlackSmithing",
         name = string.format("%d-%d  %s", s.from, s.to, s.name),

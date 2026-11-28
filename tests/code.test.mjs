@@ -519,6 +519,96 @@ test("the Craft tab with two plans: click the name or /sb craft cooking to switc
   ]);
 });
 
+test("every profession plan runs 1 to 300 with no gaps, and each part it makes has a recipe or a step", () => {
+  const out = run(`
+    local r = {}
+    local lines = {}
+    for line in pairs(ns.CRAFT_PLANS) do lines[#lines + 1] = line end
+    table.sort(lines)
+    for _, line in ipairs(lines) do
+      local plan = ns.CRAFT_PLANS[line]
+      local at, bad = 1, {}
+      for i, s in ipairs(plan.steps) do
+        if s[1] ~= at or s[2] <= s[1] or s[5] < 1 then bad[#bad + 1] = i end
+        for _, m in ipairs(s[6]) do if not (m[1] > 0 and m[2] > 0) then bad[#bad + 1] = i end end
+        at = s[2]
+      end
+      local fresh = ns.CraftPlan(plan, 1)
+      r[#r + 1] = string.format("%s:%d:%d:%s:%s", plan.name, at, fresh.crafts, #bad == 0 and "ok" or table.concat(bad, ","), tostring(plan.icon ~= nil))
+    end
+    return table.concat(r, " ")
+  `);
+  assert.equal(out, [
+    // The crafts are the guides' own numbers added up.
+    "First Aid:300:390:ok:true", "Blacksmithing:300:401:ok:true", "Leatherworking:300:409:ok:true",
+    "Alchemy:300:316:ok:true", "Cooking:300:347:ok:true", "Tailoring:300:365:ok:true",
+    "Engineering:300:393:ok:true", "Enchanting:300:315:ok:true",
+  ].join(" "));
+});
+
+test("parts the steps make count for later steps; the rest is made, even parts inside parts", () => {
+  const out = run(`
+    local eng, tail = ns.CRAFT_PLANS[202], ns.CRAFT_PLANS[197]
+    local function rows(p) local by = {} for _, r in ipairs(p.rows) do by[r.id] = r end return by end
+    local fresh = rows(ns.CraftPlan(eng, 1))
+    -- 216: past the Unstable Trigger step, so the bombs' triggers are made, each with Solid Blasting Powder.
+    local late = rows(ns.CraftPlan(eng, 216))
+    local cloth = rows(ns.CraftPlan(tail, 1, function(id) return id == 2997 and 10 or 0 end))
+    local function n(r) return r and (r.need .. "/" .. r.missing .. (r.made and "m" or "")) or "-" end
+    return table.concat({
+      n(fresh[4357]), n(fresh[2835]), n(fresh[4359]), n(fresh[10560]), n(fresh[10505]), n(fresh[4377]), n(fresh[2838]),
+      n(late[10560]), n(late[10505]), n(late[7912]), n(late[3860]), n(late[10561]),
+      n(cloth[2996]), n(cloth[2997]), n(cloth[2592]),
+    }, " ")
+  `);
+  assert.deepEqual(out.split(" "), [
+    // Powder: 58 for the bombs, 32 from the 1-30 step, 26 more made; stone for all 58.
+    "26/26m", "58/58",
+    // Bolts: 29 for the bombs, 20 from 30-50, 9 more made.
+    "9/9m",
+    // Triggers and solid powder: the steps make enough.
+    "-", "-",
+    // Heavy Blasting Powder: no step makes it, so all 30 from Heavy Stone.
+    "30/30m", "30/30",
+    // From 216: 15 triggers made, 30 + 15 solid powder, 90 Solid Stone, 96 + 15 Mithril; casings covered.
+    "15/15m", "45/45m", "90/90", "111/111", "-",
+    // Linen bolts covered; woolen: 84 - 12 made by the step = 72, 10 in bags, 62 made from 186 + 36 wool.
+    "-", "72/62m", "222/222",
+  ]);
+});
+
+test("the Craft tab tips: special trainers for your side, step notes, and the disenchant step", () => {
+  const out = run(`
+    GetProfessions = function() return 3, 4 end
+    GetProfessionInfo = function(i)
+      if i == 3 then return "Enchanting", 136244, 1, 75, 0, 0, 333 end
+      return "Alchemy", 136240, 265, 300, 0, 0, 171
+    end
+    UnitFactionGroup = function() return "Horde" end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    SnitchbotDB.settings.craftView = "steps"
+    SlashCmdList.SNITCHBOT("craft")
+    local k = SnitchbotFrame.k
+    local r = { k.who.text, k.rows[1].tip[3], k.rows[1].tip[4], k.rows[2].name.text, tostring(k.rows[2].tip[3]), tostring(k.rows[2].tip[4]) }
+    SlashCmdList.SNITCHBOT("craft alch")
+    r[#r + 1] = k.rows[2].name.text
+    r[#r + 1] = k.rows[2].tip[3]
+    r[#r + 1] = k.rows[2].tip[4]
+    return table.concat(r, "#")
+  `, { ui: true });
+  assert.deepEqual(out.split("#"), [
+    "Enchanting 1",
+    "From the trainer.",
+    "Keep the rod: the enchants to 155 need it. Mote of Magic is sold by enchanting supply vendors.",
+    "2-20  Disenchant green items",
+    "Each green or better item you disenchant is a skill point up to 20. Keep the dust and essences.", "nil",
+    "270-300  Major Discolored Healing Potion",
+    "Trained by Apothecary Renferrel, Silverpine Forest.",
+    "Taught after a short questline.",
+  ]);
+});
+
 // A fake auction house: AUCTIONS rows are { id, count, buyout }.
 const FAKE_AH = `
   AUCTIONS = {}

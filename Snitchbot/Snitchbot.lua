@@ -1570,33 +1570,38 @@ local function craftProfessions()
   return out
 end
 
--- The profession with a plan to show: the one you picked, else the first with a plan.
+-- Every plan, yours first: your skill when you have the profession, else
+-- { learned = false } at skill 1, so you can see the steps before you learn it.
+local function allCrafts()
+  local mine, seen, rest = craftProfessions(), {}, {}
+  table.sort(mine, function(a, b) return a.name < b.name end)
+  for _, p in ipairs(mine) do p.learned = true; seen[p.line] = true end
+  for line, plan in pairs(ns.CRAFT_PLANS) do
+    if not seen[line] then rest[#rest + 1] = { line = line, name = plan.name, rank = 1, learned = false } end
+  end
+  table.sort(rest, function(a, b) return a.name < b.name end)
+  for _, p in ipairs(rest) do mine[#mine + 1] = p end
+  return mine
+end
+
+-- The plan to show: the one you picked, else your first profession with a plan.
 local function craftProfession()
-  local list, pick = craftProfessions(), settings().craftLine
+  local list, pick = allCrafts(), settings().craftLine
   for _, p in ipairs(list) do
     if p.line == pick then return p end
   end
   return list[1]
 end
 
--- Show the next profession with a plan; with `name`, the one with that name.
-local function switchCraft(name)
-  local list, cur = craftProfessions(), craftProfession()
-  if name then
-    name = name:lower()
-    for _, p in ipairs(list) do
-      if p.name:lower():sub(1, #name) == name then settings().craftLine = p.line; return p end
-    end
-    return nil
-  end
-  for i, p in ipairs(list) do
-    if cur and p.line == cur.line then
-      local nxt = list[i % #list + 1]
-      settings().craftLine = nxt.line
-      return nxt
+-- Pick a plan by line, or by the start of its name ("cook"). Nil when none matches.
+local function switchCraft(what)
+  for _, p in ipairs(allCrafts()) do
+    if p.line == what or (type(what) == "string" and p.name:lower():sub(1, #what) == what:lower()) then
+      settings().craftLine = p.line
+      return p
     end
   end
-  return cur
+  return nil
 end
 
 -- Who sells recipes or plans to you.
@@ -1641,32 +1646,88 @@ local function makeCraftPane(p)
   k.who = text(p, 16, "semibold", C.text)
   k.who:SetPoint("TOPLEFT", PAD, -14)
   k.who:SetPoint("RIGHT", -PAD - 160, 0)
-  -- With more than one plan, the profession name switches to the next one.
+  -- The profession: a dropdown with every plan, yours first.
+  k.who:Hide()
   k.pick = CreateFrame("Button", nil, p)
-  k.pick:SetPoint("TOPLEFT", PAD - 4, -10)
-  k.pick:SetPoint("RIGHT", -PAD - 160, 0)
-  k.pick:SetHeight(26)
+  k.pick:SetPoint("TOPLEFT", PAD, -10)
+  k.pick:SetSize(WIDTH - 2 * PAD - 168, 26)
+  fill(k.pick, C.well):SetAllPoints()
+  hairline(k.pick, C.border)
+  k.pick.hover = fill(k.pick, C.hover, "ARTWORK")
+  k.pick.hover:SetAllPoints()
+  k.pick.hover:Hide()
+  k.pick.label = text(k.pick, 13, "semibold", C.text)
+  k.pick.label:SetPoint("LEFT", 8, 0)
+  k.pick.label:SetPoint("RIGHT", -22, 0)
+  k.pick.label:SetJustifyH("LEFT")
   k.arrow = k.pick:CreateTexture(nil, "OVERLAY")
   k.arrow:SetTexture("Interface\\ChatFrame\\ChatFrameExpandArrow")
   k.arrow:SetSize(14, 14)
+  k.arrow:SetPoint("RIGHT", -6, 0)
+  safe(k.arrow.SetRotation, k.arrow, -math.pi / 2) -- points down
   k.arrow:SetVertexColor(C.muted[1], C.muted[2], C.muted[3])
-  k.pick:SetScript("OnClick", function() switchCraft(); update() end)
-  k.pick:SetScript("OnEnter", function()
-    k.who:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
-    if not GameTooltip then return end
-    local names, cur = {}, craftProfession()
-    for _, q in ipairs(craftProfessions()) do
-      if not cur or q.line ~= cur.line then names[#names + 1] = string.format("%s %d", q.name, q.rank) end
+
+  local menu = CreateFrame("Frame", nil, p)
+  menu:SetPoint("TOPLEFT", k.pick, "BOTTOMLEFT", 0, -2)
+  menu:SetWidth(220)
+  safe(menu.SetFrameStrata, menu, "DIALOG")
+  safe(menu.SetFrameLevel, menu, (tonumber(safe(p.GetFrameLevel, p)) or 1) + 20)
+  safe(menu.EnableMouse, menu, true)
+  fill(menu, C.card):SetAllPoints()
+  hairline(menu, C.border)
+  menu:Hide()
+  menu.items = {}
+  k.menu = menu
+  local MENU_ROW = 22
+  local function fillMenu()
+    local list, cur = allCrafts(), craftProfession()
+    local y = -4
+    for i, q in ipairs(list) do
+      local b = menu.items[i]
+      if not b then
+        b = CreateFrame("Button", nil, menu)
+        b:SetHeight(MENU_ROW)
+        b.hover = fill(b, C.hover)
+        b.hover:SetAllPoints()
+        b.hover:Hide()
+        b.name = text(b, 12, "medium", C.text)
+        b.name:SetPoint("LEFT", 6, 0)
+        b.skill = text(b, 11, "regular", C.muted)
+        b.skill:SetPoint("RIGHT", -6, 0)
+        b.skill:SetJustifyH("RIGHT")
+        b:SetScript("OnEnter", function() b.hover:Show() end)
+        b:SetScript("OnLeave", function() b.hover:Hide() end)
+        b:SetScript("OnClick", function()
+          settings().craftLine = b.line
+          menu:Hide()
+          update()
+        end)
+        menu.items[i] = b
+      end
+      -- A gap between your professions and the rest.
+      if i > 1 and list[i - 1].learned and not q.learned then y = y - 6 end
+      b:ClearAllPoints()
+      b:SetPoint("TOPLEFT", menu, "TOPLEFT", 4, y)
+      b:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -4, y)
+      y = y - MENU_ROW
+      b.line = q.line
+      local on = cur and q.line == cur.line
+      local c = on and C.accent or (q.learned and C.text or C.dim)
+      b.name:SetTextColor(c[1], c[2], c[3])
+      b.name:SetText(q.name)
+      b.skill:SetText(q.learned and string.format("%d / %d", q.rank, q.max or ns.CraftPlanFor(q.line).max) or "not learned")
+      b:Show()
     end
-    GameTooltip:SetOwner(k.pick, "ANCHOR_BOTTOM")
-    GameTooltip:AddLine("Switch profession")
-    GameTooltip:AddLine("Click to show " .. table.concat(names, ", ") .. ".", 1, 1, 1, true)
-    GameTooltip:Show()
+    for i = #list + 1, #menu.items do menu.items[i]:Hide() end
+    menu:SetHeight(-y + 4)
+  end
+  k.fillMenu = fillMenu
+  k.pick:SetScript("OnClick", function()
+    if menu:IsShown() then menu:Hide() else fillMenu(); menu:Show() end
   end)
-  k.pick:SetScript("OnLeave", function()
-    k.who:SetTextColor(C.text[1], C.text[2], C.text[3])
-    if GameTooltip then GameTooltip:Hide() end
-  end)
+  k.pick:SetScript("OnEnter", function() k.pick.hover:Show() end)
+  k.pick:SetScript("OnLeave", function() k.pick.hover:Hide() end)
+  p:HookScript("OnHide", function() menu:Hide() end)
   k.sub = text(p, 12, "regular", C.muted)
   k.sub:SetPoint("TOPLEFT", PAD, -36)
   k.sub:SetPoint("RIGHT", -PAD, 0)
@@ -2501,8 +2562,8 @@ local function fillCraft()
   local out, plan, prof = craftPlan()
   for _, r in ipairs(k.rows) do r:Hide() end
   local has = out ~= nil
-  for _, part in ipairs({ k.who, k.sub, k.status, k.rule, k.scroll, k.footer, k.view, k.goal, k.goalLabel }) do show(part, has) end
-  if not has then show(k.pick, false) end
+  for _, part in ipairs({ k.pick, k.sub, k.status, k.rule, k.scroll, k.footer, k.view, k.goal, k.goalLabel }) do show(part, has) end
+  if not has then k.menu:Hide() end
   show(k.empty, not has)
   if not has then
     local names = {}
@@ -2513,14 +2574,11 @@ local function fillCraft()
   end
   local steps = settings().craftView == "steps"
   k.view.label:SetText(steps and "Shopping" or "Steps")
-  k.who:SetText(string.format("%s %d", plan.name, out.skill))
-  local several = #craftProfessions() > 1
-  show(k.pick, several)
-  if several then
-    local w = tonumber(safe(k.who.GetStringWidth, k.who)) or 130
-    k.arrow:ClearAllPoints()
-    k.arrow:SetPoint("LEFT", k.pick, "LEFT", 4 + w + 6, 0)
-  end
+  local title = prof.learned and string.format("%s %d", plan.name, out.skill) or plan.name
+  k.who:SetText(title)
+  k.pick.label:SetText(title)
+  k.who:Hide()
+  if k.menu:IsShown() then k.fillMenu() end
   if not safe(k.goal.HasFocus, k.goal) then k.goal:SetText(tostring(out.max)) end
   local next = out.steps[1]
   if out.done and out.max >= plan.max then
@@ -2532,7 +2590,9 @@ local function fillCraft()
   end
   local prices = db().prices
   local house = type(prices) == "table" and prices.house
-  if out.rank and out.rank.how then
+  if not prof.learned then
+    k.status:SetText(string.format("%sYou haven't learned %s: any %s trainer teaches it.|r", hex(C.muted), plan.name, plan.name))
+  elseif out.rank and out.rank.how then
     k.status:SetText(string.format("%s%s Your cap is %d.|r", hex(C.danger), out.rank.how, prof.max or 0))
   elseif out.rank then
     k.status:SetText(string.format("%sTrain %s: your cap is %d.|r", hex(C.danger), out.rank.name, prof.max or 0))

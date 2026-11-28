@@ -476,7 +476,7 @@ test("cooking plan: Wowhead's six steps, the Horde vendor, and the book and ques
   ]);
 });
 
-test("the Craft tab with two plans: click the name or /sb craft cooking to switch, each keeps its own goal", () => {
+test("the Craft tab dropdown: your professions first, then every other plan; pick one, even one you haven't learned", () => {
   const out = run(`
     GetProfessions = function() return 3, nil, nil, 9, 10 end
     GetProfessionInfo = function(i)
@@ -489,9 +489,15 @@ test("the Craft tab with two plans: click the name or /sb craft cooking to switc
     e.scripts.OnEvent(e, "PLAYER_LOGIN")
     SlashCmdList.SNITCHBOT("craft")
     local k = SnitchbotFrame.k
-    local r = { k.who.text, tostring(k.pick.shown) }
+    local r = { k.pick.label.text, tostring(k.menu.shown) }
     k.pick.scripts.OnClick()
-    r[#r + 1] = k.who.text
+    local names = {}
+    for _, b in ipairs(k.menu.items) do if b.shown then names[#names + 1] = b.name.text .. "=" .. b.skill.text end end
+    r[#r + 1] = table.concat(names, ",")
+    -- Pick Cooking.
+    k.menu.items[2].scripts.OnClick()
+    r[#r + 1] = tostring(k.menu.shown)
+    r[#r + 1] = k.pick.label.text
     r[#r + 1] = k.status.text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     k.view.scripts.OnClick()
     r[#r + 1] = k.rows[1].name.text
@@ -499,23 +505,32 @@ test("the Craft tab with two plans: click the name or /sb craft cooking to switc
     SlashCmdList.SNITCHBOT("craft 160")
     r[#r + 1] = k.sub.text
     SlashCmdList.SNITCHBOT("craft black")
-    r[#r + 1] = k.who.text
+    r[#r + 1] = k.pick.label.text
     r[#r + 1] = k.goal.text
+    SlashCmdList.SNITCHBOT("craft cook")
+    r[#r + 1] = k.goal.text
+    -- Tailoring isn't learned: the steps from 1, and how to get it.
     k.pick.scripts.OnClick()
-    r[#r + 1] = k.goal.text
-    SlashCmdList.SNITCHBOT("craft tailoring")
-    r[#r + 1] = k.who.text
+    for _, b in ipairs(k.menu.items) do if b.name.text == "Tailoring" then b.scripts.OnClick() end end
+    r[#r + 1] = k.pick.label.text
+    r[#r + 1] = k.status.text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    r[#r + 1] = k.rows[1].name.text
+    r[#r + 1] = k.ready.text
     return table.concat(r, "#")
   `, { ui: true });
   assert.deepEqual(out.split("#"), [
-    "Blacksmithing 80", "true",
-    "Cooking 140",
+    "Blacksmithing 80", "false",
+    "Blacksmithing=80 / 150,Cooking=140 / 150,Alchemy=not learned,Enchanting=not learned,Engineering=not learned,"
+      + "First Aid=not learned,Leatherworking=not learned,Tailoring=not learned",
+    "false", "Cooking 140",
     "Expert: buy The Expert Cookbook from Shandrina (Ashenvale) or Wulan (Desolace). Needs skill 125. Your cap is 150.",
     "100-175  Bristle Whisker Catfish",
     "Recipe from Kilxx, The Barrens.",
     "Next: Bristle Whisker Catfish x32 (100-160)  ·  32 crafts to 160",
     "Blacksmithing 80", "300", "160",
-    "Cooking 140",
+    "Tailoring",
+    "You haven't learned Tailoring: any Tailoring trainer teaches it.",
+    "1-43  Bolt of Linen Cloth", "Skill 1 of 300",
   ]);
 });
 
@@ -588,7 +603,7 @@ test("the Craft tab tips: special trainers for your side, step notes, and the di
     local e = SnitchbotEvents
     e.scripts.OnEvent(e, "PLAYER_LOGIN")
     SnitchbotDB.settings.craftView = "steps"
-    SlashCmdList.SNITCHBOT("craft")
+    SlashCmdList.SNITCHBOT("craft ench")
     local k = SnitchbotFrame.k
     local r = { k.who.text, k.rows[1].tip[3], k.rows[1].tip[4], k.rows[2].name.text, tostring(k.rows[2].tip[3]), tostring(k.rows[2].tip[4]) }
     SlashCmdList.SNITCHBOT("craft alch")

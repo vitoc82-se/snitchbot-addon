@@ -47,7 +47,7 @@ At max level the XP tab becomes **Today**: gold and gold per hour, loot value, k
 
 ## Level a profession
 
-- **Craft:** from your skill now to 300, or any goal you set, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Every crafting profession: **Alchemy, Blacksmithing, Enchanting, Engineering, Leatherworking, Tailoring, Cooking and First Aid**. Parts like bolts of cloth and blasting powder are counted for you. Click the profession name to switch.
+- **Craft:** from your skill now to 300, or any goal you set, the steps left and a shopping list with what you already have in bags and bank, what to make, and what the rest costs at your AH prices. Every crafting profession: **Alchemy, Blacksmithing, Enchanting, Engineering, Leatherworking, Tailoring, Cooking and First Aid**. Parts like bolts of cloth and blasting powder are counted for you. Pick one from the dropdown, even a profession you haven't learned yet, to see what it takes.
 
 ## Auction house prices without pasting
 

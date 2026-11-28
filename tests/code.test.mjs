@@ -534,6 +534,40 @@ test("the Craft tab dropdown: your professions first, then every other plan; pic
   ]);
 });
 
+test("the Craft list starts at the top for another profession or view, and never stays scrolled past a shorter list", () => {
+  const out = run(`
+    GetProfessions = function() return 3, nil, nil, nil, 10 end
+    GetProfessionInfo = function(i)
+      if i == 3 then return "Blacksmithing", 136241, 80, 150, 0, 0, 164 end
+      return "Cooking", 133971, 60, 75, 0, 0, 185
+    end
+    local e = SnitchbotEvents
+    e.scripts.OnEvent(e, "PLAYER_LOGIN")
+    SlashCmdList.SNITCHBOT("craft black")
+    local sf = SnitchbotFrame.k.scroll
+    sf.vs, sf.range = 0, 0
+    sf.SetVerticalScroll = function(self, v) self.vs = v end
+    sf.GetVerticalScroll = function(self) return self.vs end
+    sf.GetVerticalScrollRange = function(self) return self.range end
+    sf.GetHeight = function() return 300 end
+    -- Scrolled far down the Blacksmithing list, then Cooking.
+    sf.vs = 400
+    SlashCmdList.SNITCHBOT("craft cook")
+    local r = { sf.vs }
+    -- The same list redrawn keeps its place; a list that got shorter is clamped to its end.
+    sf.vs, sf.range = 40, 100
+    e.scripts.OnEvent(e, "BAG_UPDATE_DELAYED")
+    r[#r + 1] = sf.vs
+    sf.range = 10
+    sf.place()
+    r[#r + 1] = sf.vs
+    SnitchbotFrame.k.view.scripts.OnClick()
+    r[#r + 1] = sf.vs
+    return table.concat(r, " ")
+  `, { ui: true });
+  assert.equal(out, "0 40 10 0");
+});
+
 test("every profession plan runs 1 to 300 with no gaps, and each part it makes has a recipe or a step", () => {
   const out = run(`
     local r = {}

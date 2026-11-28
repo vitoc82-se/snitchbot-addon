@@ -260,6 +260,9 @@ local function scrollArea(parent, step)
   local function place()
     local range = tonumber(safe(sf.GetVerticalScrollRange, sf)) or 0
     local height = tonumber(safe(sf.GetHeight, sf)) or 0
+    -- A shorter list than before: don't stay scrolled past its end.
+    local now = tonumber(safe(sf.GetVerticalScroll, sf)) or 0
+    if now > math.max(0, range) then safe(sf.SetVerticalScroll, sf, math.max(0, range)) end
     if range <= 0 or height <= 0 then return thumb:Hide() end
     local size = math.max(24, height * height / (height + range))
     local at = (tonumber(safe(sf.GetVerticalScroll, sf)) or 0) / range * (height - size)
@@ -2645,6 +2648,12 @@ local function fillCraft()
       list[#list + 1] = { id = r.id, icon = itemIcon(r.id), name = name or ("Item " .. r.id), color = name and C.item or C.muted,
         count = right, done = done, tip = tip }
     end
+  end
+  -- Another profession or view starts at the top of its list.
+  local key = plan.name .. (steps and ":steps" or ":shop")
+  if k.shownKey ~= key then
+    k.shownKey = key
+    safe(k.scroll.SetVerticalScroll, k.scroll, 0)
   end
   k.child:SetHeight(math.max(ROW_HEIGHT, #list * ROW_HEIGHT))
   local ready = 0
